@@ -11,7 +11,7 @@ from .util import (
     timestep_embedding,
 )
 
-from .attention import SpatialTransformer
+from .attention import SpatialTransformer, liem
 from .openaimodel import UNetModel, TimestepEmbedSequential, ResBlock, Downsample, AttentionBlock, Upsample
 
 def exists(x):
@@ -41,8 +41,17 @@ class ZeroSRCConnector(nn.Module):
     
 
 class ControlledUnetModel(UNetModel):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, use_liem=True, liem_kernel_size=7, **kwargs):
         super().__init__(*args, **kwargs)
+        self.use_liem = use_liem
+        self.liem_modules = nn.ModuleList()
+        self.liem_indices = []  # Keep track of which decoder blocks get LIEM
+
+        for i, block in enumerate(self.output_blocks):
+            if any(isinstance(layer, SpatialTransformer) for layer in block[:2]):
+                self.liem_modules.append(liem(liem_kernel_size))
+                self.liem_indices.append(i)
+
         self.zeroSRC_connector = nn.ModuleList()
         for module in self.output_blocks:
             if len(module) == 3:
@@ -82,6 +91,9 @@ class ControlledUnetModel(UNetModel):
                     if isinstance(layer, ResBlock):
                         h = layer(h, emb)
                     elif isinstance(layer, SpatialTransformer):
+                        if self.use_liem and i in self.liem_indices:
+                            liem_idx = self.liem_indices.index(i)
+                            h = self.liem_modules[liem_idx](h)
                         h = layer(h, context)
                     else:
                         h = layer(h)
