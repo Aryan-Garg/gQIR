@@ -1,0 +1,121 @@
+model:
+  cldm:
+    target: gqvr.model.cldm.ControlLDM
+    params:
+      latent_scale_factor: 0.18215
+      unet_cfg:
+        use_checkpoint: True
+        image_size: 32 # unused
+        in_channels: 4
+        out_channels: 4
+        model_channels: 320
+        attention_resolutions: [ 4, 2, 1 ]
+        num_res_blocks: 2
+        channel_mult: [ 1, 2, 4, 4 ]
+        num_head_channels: 64 # need to fix for flash-attn
+        use_spatial_transformer: True
+        use_linear_in_transformer: True
+        transformer_depth: 1
+        context_dim: 1024
+        legacy: False
+      vae_cfg:
+        embed_dim: 4
+        ddconfig:
+          double_z: true
+          z_channels: 4
+          resolution: 256
+          in_channels: 3
+          out_ch: 3
+          ch: 128
+          ch_mult:
+          - 1
+          - 2
+          - 4
+          - 4
+          num_res_blocks: 2
+          attn_resolutions: []
+          dropout: 0.0
+      clip_cfg:
+        embed_dim: 1024
+        vision_cfg:
+          image_size: 224
+          layers: 32
+          width: 1280
+          head_width: 80
+          patch_size: 14
+        text_cfg:
+          context_length: 77
+          vocab_size: 49408
+          width: 1024
+          heads: 16
+          layers: 24
+        layer: "penultimate" # minus 1 ==> Uses last layer of OpenCLIP/VIT-H-14
+      controlnet_cfg:
+        use_checkpoint: True
+        image_size: 32 # unused
+        in_channels: 4
+        hint_channels: 4
+        model_channels: 320
+        attention_resolutions: [ 4, 2, 1 ]
+        num_res_blocks: 2
+        channel_mult: [ 1, 2, 4, 4 ]
+        num_head_channels: 64 # need to fix for flash-attn
+        use_spatial_transformer: True
+        use_linear_in_transformer: True
+        transformer_depth: 1
+        context_dim: 1024
+        legacy: False
+
+  diffusion:
+    target: gqvr.model.gaussian_diffusion.Diffusion
+    params:
+      linear_start: 0.00085
+      linear_end: 0.0120
+      timesteps: 1000
+      zero_snr: True
+      parameterization: v
+
+dataset:
+  train:
+    target: gqvr.dataset.realesrgan.RealESRGANDataset
+    params:
+      # Path to the file list.
+      file_metas:
+        # The training set is formatted as a parquet file.
+        # Each row contains file path, long caption and short caption of a high-quality image.
+        - file_list: 
+          image_path_key: image_path
+          short_prompt_key: llava_short
+          long_prompt_key: llava_long
+
+      p_long_prompt: 0.2
+
+      file_backend_cfg:
+        target: gqvr.dataset.file_backend.HardDiskBackend
+
+      out_size: 512
+      crop_type: none
+
+      use_hflip: false
+      use_rot: false
+      final_sinc_prob: 0.8
+      p_empty_prompt: 0.2
+
+batch_transform:
+  target: gqvr.dataset.batch_transform.IdentityBatchTransform
+
+train:
+  # pretrained sd v2.1-zsnr path
+  sd_path: /home/argar/apgi/gQVR/pretrained_checkpoints/sd2.1-base-zsnr-laionaes5.ckpt
+  # experiment directory path
+  exp_dir: /home/argar/apgi/gQVR/experiments/dassi
+  vae_path: /home/argar/apgi/gQVR/pretrained_checkpoints/1060000.pt
+  learning_rate: 1e-5
+  batch_size: 512
+  num_workers: 16
+  train_steps: 3000000
+  log_every: 200
+  ckpt_every: 10000
+  image_every: 1000
+  resume: 
+  noise_aug_timestep: 200
