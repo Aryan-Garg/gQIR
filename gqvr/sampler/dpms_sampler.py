@@ -31,9 +31,9 @@ class DPMSolverSampler(Sampler):
         else:
             raise ValueError(parameterization)
         # parse samping args from string
-        # As used in gQVR: dpm++_m2 => solver_type=dpmsolver++, method=multistep, order=2
+        # As used in gQVR: gdpm++_m2 => solver_type=dpmsolver++, method=multistep, order=2
         solver_type, (method, order) = model_spec.split("_")
-        self.solver_type = {"dpm": "dpmsolver", "dpm++": "dpmsolver++"}[solver_type]
+        self.solver_type = {"dpm": "dpmsolver", "dpm++": "dpmsolver++", "gdpm++": "guided_dpm++"}[solver_type]
         self.method = {"s": "singlestep", "m": "multistep"}[method]
         self.order = {"1": 1, "2": 2, "3": 3}[order]
         self.register("betas", betas)
@@ -95,6 +95,7 @@ class DPMSolverSampler(Sampler):
             method=self.method,
             order=self.order,
             return_intermediate=False,
+            cond=cond
         )
         if tiled:
             model.forward = forward

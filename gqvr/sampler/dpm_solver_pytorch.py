@@ -357,7 +357,7 @@ class DPM_Solver:
         self,
         model_fn,
         noise_schedule,
-        algorithm_type="dpmsolver++",
+        algorithm_type="guided_dpmsolver++", # "dpmsolver | dpmsolver++ | guided_dpmsolver++"
         correcting_x0_fn=None,
         correcting_xt_fn=None,
         thresholding_max_val=1.,
@@ -366,6 +366,7 @@ class DPM_Solver:
         """Construct a DPM-Solver. 
 
         We support both DPM-Solver (`algorithm_type="dpmsolver"`) and DPM-Solver++ (`algorithm_type="dpmsolver++"`).
+        -> guided_dpmsolver++ is the restoration guided sampler from the paper gQVR (base support only for DPM-Solver++ 2M) [2]
 
         We also support the "dynamic thresholding" method in Imagen[1]. For pixel-space diffusion models, you
         can set both `algorithm_type="dpmsolver++"` and `correcting_x0_fn="dynamic_thresholding"` to use the
@@ -384,7 +385,7 @@ class DPM_Solver:
                 ``
                 The shape of `x` is `(batch_size, **shape)`, and the shape of `t_continuous` is `(batch_size,)`.
             noise_schedule: A noise schedule object, such as NoiseScheduleVP.
-            algorithm_type: A `str`. Either "dpmsolver" or "dpmsolver++".
+            algorithm_type: A `str`. Choices: "dpmsolver" or "dpmsolver++" or "guided_dpmsolver++".
             correcting_x0_fn: A `str` or a function with the following format:
                 ```
                 def correcting_x0_fn(x0, t):
@@ -418,10 +419,12 @@ class DPM_Solver:
         [1] Chitwan Saharia, William Chan, Saurabh Saxena, Lala Li, Jay Whang, Emily Denton, Seyed Kamyar Seyed Ghasemipour,
             Burcu Karagol Ayan, S Sara Mahdavi, Rapha Gontijo Lopes, et al. Photorealistic text-to-image diffusion models
             with deep language understanding. arXiv preprint arXiv:2205.11487, 2022b.
+        [2] Aryan Garg, Sizhuo Ma, Mohit Gupta. Generative Quanta Video Reconstruction.
         """
         self.model = lambda x, t: model_fn(x, t.expand((x.shape[0])))
+        self.pure_cldm = model_fn
         self.noise_schedule = noise_schedule
-        assert algorithm_type in ["dpmsolver", "dpmsolver++"]
+        assert algorithm_type in ["dpmsolver", "dpmsolver++", "guided_dpmsolver++"]
         self.algorithm_type = algorithm_type
         if correcting_x0_fn == "dynamic_thresholding":
             self.correcting_x0_fn = self.dynamic_thresholding_fn
@@ -463,7 +466,7 @@ class DPM_Solver:
         """
         Convert the model to the noise prediction model or the data prediction model. 
         """
-        if self.algorithm_type == "dpmsolver++":
+        if self.algorithm_type == "dpmsolver++" or self.algorithm_type == "guided_dpmsolver++":
             return self.data_prediction_fn(x, t)
         else:
             return self.noise_prediction_fn(x, t)
@@ -811,7 +814,8 @@ class DPM_Solver:
         else:
             return x_t
 
-    def multistep_dpm_solver_second_update(self, x, model_prev_list, t_prev_list, t, solver_type="dpmsolver"):
+    # TODO: guided (drift) restoration
+    def multistep_dpm_solver_second_update(self, x, model_prev_list, t_prev_list, t, solver_type="dpmsolver", x_lq=None):
         """
         Multistep solver DPM-Solver-2 from time `t_prev_list[-1]` to time `t`.
 
@@ -838,8 +842,29 @@ class DPM_Solver:
         h_0 = lambda_prev_0 - lambda_prev_1
         h = lambda_t - lambda_prev_0
         r0 = h_0 / h
-        D1_0 = (1. / r0) * (model_prev_0 - model_prev_1)
+        
         if self.algorithm_type == "dpmsolver++":
+            D1_0 = (1. / r0) * (model_prev_0 - model_prev_1)
+            phi_1 = torch.expm1(-h)
+            if solver_type == 'dpmsolver':
+                x_t = (
+                    (sigma_t / sigma_prev_0) * x
+                    - (alpha_t * phi_1) * model_prev_0
+                    - 0.5 * (alpha_t * phi_1) * D1_0
+                )
+            elif solver_type == 'taylor':
+                x_t = (
+                    (sigma_t / sigma_prev_0) * x
+                    - (alpha_t * phi_1) * model_prev_0
+                    + (alpha_t * (phi_1 / h + 1.)) * D1_0
+                )
+        # TODO: 
+        elif self.algorithm_type == "guided_dpmsolver++":
+            gamma = 1.
+            # TODO
+            z_hat_lq = self.pure_cldm.prepare_cond # Enc(x_LQ)
+
+            D1_0 = (1. / r0) * (model_prev_0 - model_prev_1)
             phi_1 = torch.expm1(-h)
             if solver_type == 'dpmsolver':
                 x_t = (
@@ -854,6 +879,7 @@ class DPM_Solver:
                     + (alpha_t * (phi_1 / h + 1.)) * D1_0
                 )
         else:
+            D1_0 = (1. / r0) * (model_prev_0 - model_prev_1)
             phi_1 = torch.expm1(h)
             if solver_type == 'dpmsolver':
                 x_t = (
@@ -868,8 +894,9 @@ class DPM_Solver:
                     - (sigma_t * (phi_1 / h - 1.)) * D1_0
                 )
         return x_t
-
-    def multistep_dpm_solver_third_update(self, x, model_prev_list, t_prev_list, t, solver_type='dpmsolver'):
+    
+    # TODO: guided (drift) restoration
+    def multistep_dpm_solver_third_update(self, x, model_prev_list, t_prev_list, t, solver_type='dpmsolver', x_lq=None):
         """
         Multistep solver DPM-Solver-3 from time `t_prev_list[-1]` to time `t`.
 
@@ -947,7 +974,7 @@ class DPM_Solver:
         else:
             raise ValueError("Solver order must be 1 or 2 or 3, got {}".format(order))
 
-    def multistep_dpm_solver_update(self, x, model_prev_list, t_prev_list, t, order, solver_type='dpmsolver'):
+    def multistep_dpm_solver_update(self, x, model_prev_list, t_prev_list, t, order, x_lq=None, solver_type='dpmsolver'):
         """
         Multistep DPM-Solver with the order `order` from time `t_prev_list[-1]` to time `t`.
 
@@ -964,10 +991,17 @@ class DPM_Solver:
         """
         if order == 1:
             return self.dpm_solver_first_update(x, t_prev_list[-1], t, model_s=model_prev_list[-1])
+    
         elif order == 2:
+            if x_lq:
+                return self.multistep_dpm_solver_second_update(x, model_prev_list, t_prev_list, t, solver_type=solver_type, x_lq=x_lq)
             return self.multistep_dpm_solver_second_update(x, model_prev_list, t_prev_list, t, solver_type=solver_type)
+        
         elif order == 3:
+            if x_lq:
+                return self.multistep_dpm_solver_third_update(x, model_prev_list, t_prev_list, t, solver_type=solver_type, x_lq=x_lq)
             return self.multistep_dpm_solver_third_update(x, model_prev_list, t_prev_list, t, solver_type=solver_type)
+        
         else:
             raise ValueError("Solver order must be 1 or 2 or 3, got {}".format(order))
 
@@ -1064,7 +1098,7 @@ class DPM_Solver:
 
     def sample(self, x, steps=20, t_start=None, t_end=None, order=2, skip_type='time_uniform',
         method='multistep', lower_order_final=True, denoise_to_zero=False, solver_type='dpmsolver',
-        atol=0.0078, rtol=0.05, return_intermediate=False,
+        atol=0.0078, rtol=0.05, return_intermediate=False, cond=None,
     ):
         """
         Compute the sample at time `t_end` by DPM-Solver, given the initial `x` at time `t_start`.
@@ -1202,7 +1236,13 @@ class DPM_Solver:
                 # Init the first `order` values by lower order multistep DPM-Solver.
                 for step in range(1, order):
                     t = timesteps[step]
-                    x = self.multistep_dpm_solver_update(x, model_prev_list, t_prev_list, t, step, solver_type=solver_type)
+                    if self.algorithm_type == "guided_dpmsolver++":
+                        x = self.multistep_dpm_solver_update(x, model_prev_list, t_prev_list, t, step, 
+                                                                x_lq=cond["c_img"], # Courtesy Aryan Garg ;)
+                                                                solver_type=solver_type)
+                    else:
+                        x = self.multistep_dpm_solver_update(x, model_prev_list, t_prev_list, t, step, solver_type=solver_type)
+
                     if self.correcting_xt_fn is not None:
                         x = self.correcting_xt_fn(x, t, step)
                     if return_intermediate:
