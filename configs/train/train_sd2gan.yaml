@@ -1,30 +1,25 @@
-output_dir: TODO
+output_dir: /home/argar/apgi/gQVR/experiments
 
-data_config:
+
+dataset:
   train:
-    batch_size: 1
-    dataloader_num_workers: 96
-    dataset:
-      target: gqvr.dataset.spc_image_only.SPCDataset
-      params:
-        file_meta:
-          file_list: TODO
-          image_path_prefix: TODO
-          image_path_key: TODO
-          prompt_key: TODO
-        file_backend_cfg:
-          target: gqvr.dataset.file_backend.HardDiskBackend
-        out_size: 512
-        crop_type: none
-        use_hflip: true
-        use_rot: false
-
-        final_sinc_prob: 0.8
-
-        p_empty_prompt: 0.0
-
-    batch_transform:
-      target: gqvr.dataset.batch_transform.IdentityBatchTransform
+    target: gqvr.dataset.spc_image_only.SPCDataset
+    params:
+      file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/combined_dataset.txt
+      file_backend_cfg:
+        target: gqvr.dataset.file_backend.HardDiskBackend
+      out_size: 512
+      crop_type: "center"
+      use_hflip: False
+  val:
+    target: gqvr.dataset.spc_image_only.SPCDataset
+    params:
+      file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/random_val.txt
+      file_backend_cfg:
+        target: gqvr.dataset.file_backend.HardDiskBackend
+      out_size: 512
+      crop_type: "center"
+      use_hflip: False
         
 
 base_model_type: sd2
@@ -47,16 +42,16 @@ opt_kwargs:
   betas: [0.9, 0.999]
 
 mixed_precision: bf16
-seed: 231
-max_train_steps: 30000
-gradient_accumulation_steps: 1
+seed: 310
+max_train_steps: 3000000
+gradient_accumulation_steps: 4
 gradient_checkpointing: true
 max_grad_norm: 1.0
 logging_dir: logs
 report_to: tensorboard
-checkpointing_steps: 500
+checkpointing_steps: 1000
 checkpoints_total_limit: 2
 resume_from_checkpoint: ~
-log_image_steps: 100
-log_grad_steps: 100
+log_image_steps: 500
+log_grad_steps: 500
 log_grad_modules: [conv_out]
