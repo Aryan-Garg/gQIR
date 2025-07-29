@@ -255,8 +255,9 @@ class BaseTrainer:
 
     def prepare_batch_inputs(self, batch):
         batch = self.batch_transform(batch)
-        gt = (batch["GT"] * 2 - 1).float()
-        lq = (batch["LQ"] * 2 - 1).float()
+        gt, lq, prompt = batch
+        # gt = (batch["GT"] * 2 - 1).float()
+        # lq = (batch["LQ"] * 2 - 1).float()
         prompt = batch["txt"]
         bs = len(prompt)
         c_txt = self.encode_prompt(prompt)
