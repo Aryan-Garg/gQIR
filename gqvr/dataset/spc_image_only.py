@@ -78,7 +78,9 @@ class SPCDataset(data.Dataset):
         if img_gt is None:
             return None
         img = srgb_to_linearrgb(img_gt / 255.)
-        img = emulate_spc(img)
+        img = emulate_spc(img, 
+                          factor=1.0 # Brightness directly proportional to this hparam. 1.0 => scene's natural lighting
+                        )
         return img
 
 
@@ -126,10 +128,22 @@ class SPCDataset(data.Dataset):
             # else:
             #     # This is DIV2K, FFHQ, LHQ, REDS, UDM10, SPMC, FLICKR2K or LAION-170M dataset
             #     img_lq = self.generate_spc_from_gt(img_gt)
-            img_lq = self.generate_spc_from_gt(img_gt)
-            if img_gt is None or img_lq is None:
+            
+            if img_gt is None:
                 print(f"failed to load {gt_path} or generate lq image, try another image")
                 index = random.randint(0, len(self) - 1)
+                continue
+
+            # NOTE: SPAD bit-resolution was changed permanently --- No need for 1-bit VAEs
+            # However, to revert back... uncomment:
+            # img_lq = self.generate_spc_from_gt(img_gt)
+            # And comment the following
+            img_lq_sum = np.zeros_like(img_gt, dtype=np.float32)
+            bits = 3 # bits
+            N = 2**bits - 1
+            for i in range(N): # 4-bit (2**4 - 1)
+                img_lq_sum = img_lq_sum + self.generate_spc_from_gt(img_gt)
+            img_lq = img_lq_sum / (1.0*N)
 
 
         # Shape: (h, w, c); channel order: RGB; image range: [0, 1], float32.

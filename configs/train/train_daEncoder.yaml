@@ -48,14 +48,14 @@ train:
   sd_path: "/home/argar/apgi/gQVR/pretrained_checkpoints/sd2.1-base-zsnr-laionaes5.ckpt"
   # experiment directory path
   exp_dir: /home/argar/apgi/gQVR/experiments
-  learning_rate: 1e-6
+  learning_rate: 1e-5
   batch_size: 1
-  num_workers: 24
+  num_workers: 96
   train_steps: 3_000_000
-  log_every: 200
-  ckpt_every: 5000
-  image_every: 500
-  val_every: 200
+  log_every: 1000
+  ckpt_every: 50000
+  image_every: 5000
+  val_every: 5000
   # Loss params
   loss_mode: "ls_gt_perceptual" # "mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual"
   loss_scales:

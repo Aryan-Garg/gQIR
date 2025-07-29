@@ -1,0 +1,62 @@
+output_dir: TODO
+
+data_config:
+  train:
+    batch_size: 1
+    dataloader_num_workers: 96
+    dataset:
+      target: gqvr.dataset.spc_image_only.SPCDataset
+      params:
+        file_meta:
+          file_list: TODO
+          image_path_prefix: TODO
+          image_path_key: TODO
+          prompt_key: TODO
+        file_backend_cfg:
+          target: gqvr.dataset.file_backend.HardDiskBackend
+        out_size: 512
+        crop_type: none
+        use_hflip: true
+        use_rot: false
+
+        final_sinc_prob: 0.8
+
+        p_empty_prompt: 0.0
+
+    batch_transform:
+      target: gqvr.dataset.batch_transform.IdentityBatchTransform
+        
+
+base_model_type: sd2
+base_model_path: /home/argar/apgi/gQVR/pretrained_checkpoints/sd2.1-base-zsnr-laionaes5.ckpt
+model_t: 200
+coeff_t: 200
+lora_rank: 256
+lora_modules: [to_k, to_q, to_v, to_out.0, conv, conv1, conv2, conv_shortcut, conv_out, proj_in, proj_out, ff.net.2, ff.net.0.proj]
+use_ema: true
+ema_decay: 0.999
+resume_ema: true
+
+lambda_gan: 0.5
+lambda_lpips: 5
+lambda_l2: 1
+lr_G: 1e-5
+lr_D: 1e-5
+optimizer_type: adam
+opt_kwargs:
+  betas: [0.9, 0.999]
+
+mixed_precision: bf16
+seed: 231
+max_train_steps: 30000
+gradient_accumulation_steps: 1
+gradient_checkpointing: true
+max_grad_norm: 1.0
+logging_dir: logs
+report_to: tensorboard
+checkpointing_steps: 500
+checkpoints_total_limit: 2
+resume_from_checkpoint: ~
+log_image_steps: 100
+log_grad_steps: 100
+log_grad_modules: [conv_out]

@@ -75,7 +75,7 @@ def main(args) -> None:
     missing_keys, unexpected_keys = vae.load_state_dict(vae_sd, strict=False)
     if accelerator.is_main_process:
         print(
-            f"strictly load pretrained SD weight from {cfg.train.sd_path}\n"
+            f"Load pretrained SD weight from {cfg.train.sd_path}\n"
             f"unexpected weights: {unexpected_keys}\n"
             f"missing weights: {missing_keys}"
         )
@@ -115,14 +115,12 @@ def main(args) -> None:
 
     batch_transform = instantiate_from_config(cfg.batch_transform)
 
-    # Just before pushing stuff on the gpu clear once:
-    torch.cuda.empty_cache() 
-
     # Prepare models for training/inference:
     vae.to(device)
     vae, opt, loader, val_loader = accelerator.prepare(
         vae, opt, loader, val_loader
     )
+    vae = accelerator.unwrap_model(vae)
 
     # for name, p in vae.named_parameters():
     #     print(f"{name} -> {p.shape} isTrainable? {p.requires_grad}")

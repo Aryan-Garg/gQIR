@@ -76,7 +76,8 @@ class ControlledUnetModel(UNetModel):
             h = self.middle_block(h, emb, context)
 
         if control is not None:
-            h = self.zeroSRC_connector[adapter_idx](h, control[control_idx], control_scale=1.)
+            combined = control[control_idx] + hs.pop()
+            h = self.zeroSRC_connector[adapter_idx](h, combined, control_scale=1.)
             adapter_idx -= 1
             control_idx -= 1
 
@@ -99,19 +100,19 @@ class ControlledUnetModel(UNetModel):
                         h = layer(h)
 
                 if control is not None:
-                    # Control injection before upsample
-                    h = self.zeroSRC_connector[adapter_idx](h, control[control_idx], control_scale=1.)
+                    combined = control[control_idx] + skip
+                    h = self.zeroSRC_connector[adapter_idx](h, combined, control_scale=1.)
                     adapter_idx -= 1
                     control_idx -= 1
-                h = module[2](h)  # Upsample
+                h = module[2](h)  # Upsample 
                     
                 # Second control injection after skip connection
                 if only_mid_control or control is None:
                     # h = torch.cat([h, hs.pop()], dim=1)
                     h = self.zeroSRC_connector[adapter_idx](h, skip, control_scale=1.)
                 else:
-                    # h = torch.cat([h,  hs.pop() + control.pop()], dim=1) 
-                    h = self.zeroSRC_connector[adapter_idx](h, control[control_idx], control_scale=1.)
+                    combined = control[control_idx] + skip
+                    h = self.zeroSRC_connector[adapter_idx](h, combined, control_scale=1.)
                     control_idx -= 1
                 adapter_idx -= 1
 
@@ -119,7 +120,8 @@ class ControlledUnetModel(UNetModel):
                 if only_mid_control or control is None:
                     h = self.zeroSRC_connector[adapter_idx](h, skip, control_scale=1.)
                 else:
-                    h = self.zeroSRC_connector[adapter_idx](h, control[control_idx], control_scale=1.)
+                    combined = control[control_idx] + skip
+                    h = self.zeroSRC_connector[adapter_idx](h, combined, control_scale=1.)
                     control_idx -= 1
                 adapter_idx -= 1
                 

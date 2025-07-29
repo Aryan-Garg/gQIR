@@ -32,6 +32,9 @@
 
 ## <a id="training"></a>Training
 <!-- Arch Image -->
+
+Currently the brightness scale/factor (proportional to PPP) is set to 1.0 for all simulations
+
 ## Stage 1: Training the Frame Denoiser/Degradation-Aware Encoder
 
 ### Stage 2: Finetuning the Generative Pipeline with it

@@ -1,0 +1,9 @@
+# Configuration for Cog ⚙️
+# Reference: https://cog.run/yaml
+
+build:
+  gpu: true
+  # python_version: "3.10"
+  python_requirements: requirements_hypir.txt
+
+predict: "predict.py:Predictor"
