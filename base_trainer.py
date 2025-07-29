@@ -119,7 +119,25 @@ class BaseTrainer:
 
     def init_vae(self):
         self.vae = AutoencoderKL.from_pretrained(
-            self.config.base_model_path, subfolder="vae", torch_dtype=self.weight_dtype).to(self.device)
+            self.config.base_model_path, subfolder="vae", torch_dtype=self.weight_dtype)
+        
+        # Load quanta VAE
+        daVAE = torch.load(self.config.qvae_path, map_location="cpu")
+
+        init_vae = {}
+        vae_used = set()
+        scratch_vae = self.vae.state_dict()
+        for key in scratch_vae:
+            if key not in daVAE:
+                print(f"[!] {key} missing in daVAE")
+                continue
+            # print(f"Found {key} in daVAE. Loading...")
+            init_vae[key] = daVAE[key].clone()
+            vae_used.add(key)
+            self.vae.load_state_dict(init_vae, strict=False)
+        ####
+        vae_unused = set(daVAE.keys()) - vae_used
+        print(f"[!] VAE keys NOT used: {vae_unused}")
         self.vae.eval().requires_grad_(False)
 
     def init_lpips(self):
@@ -182,8 +200,8 @@ class BaseTrainer:
         )
 
     def init_dataset(self):
-        data_cfg = self.config.data_config
-        dataset = instantiate_from_config(data_cfg.train.dataset)
+        data_cfg = self.config.dataset
+        dataset = instantiate_from_config(data_cfg.train)
         self.dataloader = torch.utils.data.DataLoader(
             dataset,
             shuffle=True,

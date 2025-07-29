@@ -3,6 +3,8 @@ output_dir: /home/argar/apgi/gQVR/experiments
 
 dataset:
   train:
+    batch_size: 8
+    dataloader_num_workers: 96
     target: gqvr.dataset.spc_image_only.SPCDataset
     params:
       file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/combined_dataset.txt
@@ -11,7 +13,12 @@ dataset:
       out_size: 512
       crop_type: "center"
       use_hflip: False
+    batch_transform:
+      target: gqvr.dataset.batch_transform.IdentityBatchTransform
+
   val:
+    batch_size: 4
+    dataloader_num_workers: 96
     target: gqvr.dataset.spc_image_only.SPCDataset
     params:
       file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/random_val.txt
@@ -20,10 +27,13 @@ dataset:
       out_size: 512
       crop_type: "center"
       use_hflip: False
+    batch_transform:
+      target: gqvr.dataset.batch_transform.IdentityBatchTransform
         
 
 base_model_type: sd2
 base_model_path: /home/argar/apgi/gQVR/pretrained_checkpoints/sd2.1-base-zsnr-laionaes5.ckpt
+qvae_path: /home/argar/apgi/gQVR/experiments/3bit_vae_10xlr_8xBS/0350000.pt
 model_t: 200
 coeff_t: 200
 lora_rank: 256
