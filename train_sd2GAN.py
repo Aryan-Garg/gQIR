@@ -83,14 +83,14 @@ class SD2Trainer(BaseTrainer):
         self.accelerator.register_load_state_pre_hook(load_model_hook)
 
     def forward_generator(self):
-        z_in = self.batch_inputs.z_lq * self.vae.config.scaling_factor
+        z_in = self.batch_inputs.z_lq * 0.18215 # vae scaling factor
         eps = self.G(
             z_in,
             self.batch_inputs.timesteps,
             encoder_hidden_states=self.batch_inputs.c_txt["text_embed"],
         ).sample
         z = self.scheduler.step(eps, self.config.coeff_t, z_in).pred_original_sample
-        x = self.vae.decode(z.to(self.weight_dtype) / self.vae.config.scaling_factor).sample.float()
+        x = self.vae.decode(z.to(self.weight_dtype) / 0.18215).sample.float()
         return x
     
 

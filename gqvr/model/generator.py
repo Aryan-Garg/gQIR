@@ -54,11 +54,11 @@ class SD2Enhancer(BaseEnhancer):
         )
 
     def forward_generator(self, z_lq):
-        z_in = z_lq * self.vae.config.scaling_factor
+        z_in = z_lq * 0.18215 # Use self.vae.config.scaling_factor if using diffusers
         eps = self.G(
             z_in, self.inputs["timesteps"],
             encoder_hidden_states=self.inputs["c_txt"]["text_embed"],
         ).sample
         z = self.scheduler.step(eps, self.coeff_t, z_in).pred_original_sample
-        z_out = z / self.vae.config.scaling_factor
+        z_out = z / 0.18215 # VAE's scaling factor
         return z_out

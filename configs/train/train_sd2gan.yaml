@@ -17,7 +17,7 @@ dataset:
       target: gqvr.dataset.batch_transform.IdentityBatchTransform
 
   val:
-    batch_size: 4
+    batch_size: 8
     dataloader_num_workers: 96
     target: gqvr.dataset.spc_image_only.SPCDataset
     params:
@@ -59,7 +59,7 @@ gradient_checkpointing: true
 max_grad_norm: 1.0
 logging_dir: logs
 report_to: tensorboard
-checkpointing_steps: 1000
+checkpointing_steps: 5000
 checkpoints_total_limit: 2
 resume_from_checkpoint: ~
 log_image_steps: 500

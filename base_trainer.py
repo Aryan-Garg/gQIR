@@ -279,7 +279,10 @@ class BaseTrainer:
         prompt = batch["txt"]
         bs = len(prompt)
         c_txt = self.encode_prompt(prompt)
-        z_lq = self.vae.encode(lq.to(self.weight_dtype)).latent_dist.sample()
+        # NOTE:
+        # .sample() => Adding some noise to the encoded latent --- for perception vs fidelity control
+        # .mode() => For maximum fidelity 
+        z_lq = self.vae.encode(lq.to(self.weight_dtype)).mode() 
         timesteps = torch.full((bs,), self.config.model_t, dtype=torch.long, device=self.device)
         self.batch_inputs = BatchInput(
             gt=gt, lq=lq,
