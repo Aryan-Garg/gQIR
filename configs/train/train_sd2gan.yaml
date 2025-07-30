@@ -3,7 +3,7 @@ output_dir: /home/argar/apgi/gQVR/experiments
 
 dataset:
   train:
-    batch_size: 8
+    batch_size: 2
     dataloader_num_workers: 96
     target: gqvr.dataset.spc_image_only.SPCDataset
     params:
@@ -17,7 +17,7 @@ dataset:
       target: gqvr.dataset.batch_transform.IdentityBatchTransform
 
   val:
-    batch_size: 8
+    batch_size: 1
     dataloader_num_workers: 96
     target: gqvr.dataset.spc_image_only.SPCDataset
     params:
@@ -79,9 +79,9 @@ gradient_checkpointing: true
 max_grad_norm: 1.0
 logging_dir: logs
 report_to: tensorboard
-checkpointing_steps: 5000
-checkpoints_total_limit: 2
+checkpointing_steps: 500
+checkpoints_total_limit: None
 resume_from_checkpoint: ~
-log_image_steps: 500
-log_grad_steps: 500
+log_image_steps: 250
+log_grad_steps: 250
 log_grad_modules: [conv_out]
