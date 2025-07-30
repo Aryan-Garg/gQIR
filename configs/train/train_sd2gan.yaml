@@ -33,7 +33,7 @@ dataset:
 
 base_model_type: sd2
 base_model_path: /home/argar/apgi/gQVR/pretrained_checkpoints/sd2.1-base-zsnr-laionaes5.ckpt
-qvae_path: /home/argar/apgi/gQVR/experiments/3bit_vae_10xlr_8xBS/0350000.pt
+qvae_path: /home/argar/apgi/gQVR/experiments/3bit_vae_10xlr_8xBS/0600000.pt
 model_t: 200
 coeff_t: 200
 lora_rank: 256

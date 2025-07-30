@@ -1,6 +1,5 @@
 from contextlib import contextmanager
-from vaehook import VAEHook
-
+from .vaehook import VAEHook
 
 @contextmanager
 def enable_tiled_vae(

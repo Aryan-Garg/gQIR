@@ -69,7 +69,144 @@ from einops import rearrange
 import os
 import sys
 sys.path.append(os.getcwd())
-import devices as devices
+
+import contextlib
+from functools import lru_cache
+
+#from modules import errors
+
+if sys.platform == "darwin":
+    from modules import mac_specific
+
+
+def has_mps() -> bool:
+    if sys.platform != "darwin":
+        return False
+    else:
+        return mac_specific.has_mps
+
+
+def get_cuda_device_string():
+    return "cuda"
+
+
+def get_optimal_device_name():
+    if torch.cuda.is_available():
+        return get_cuda_device_string()
+
+    if has_mps():
+        return "mps"
+
+    return "cpu"
+
+
+def get_optimal_device():
+    return torch.device(get_optimal_device_name())
+
+
+def get_device_for(task):
+    return get_optimal_device()
+
+
+def torch_gc():
+
+    if torch.cuda.is_available():
+        with torch.cuda.device(get_cuda_device_string()):
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+
+    if has_mps():
+        mac_specific.torch_mps_gc()
+
+
+def enable_tf32():
+    if torch.cuda.is_available():
+
+        # enabling benchmark option seems to enable a range of cards to do fp16 when they otherwise can't
+        # see https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/4407
+        if any(torch.cuda.get_device_capability(devid) == (7, 5) for devid in range(0, torch.cuda.device_count())):
+            torch.backends.cudnn.benchmark = True
+
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
+
+enable_tf32()
+#errors.run(enable_tf32, "Enabling TF32")
+
+cpu = torch.device("cpu")
+device = device_interrogate = device_gfpgan = device_esrgan = device_codeformer = torch.device("cuda")
+dtype = torch.float16
+dtype_vae = torch.float16
+dtype_unet = torch.float16
+unet_needs_upcast = False
+
+
+def cond_cast_unet(input):
+    return input.to(dtype_unet) if unet_needs_upcast else input
+
+
+def cond_cast_float(input):
+    return input.float() if unet_needs_upcast else input
+
+
+def randn(seed, shape):
+    torch.manual_seed(seed)
+    return torch.randn(shape, device=device)
+
+
+def randn_without_seed(shape):
+    return torch.randn(shape, device=device)
+
+
+def autocast(disable=False):
+    if disable:
+        return contextlib.nullcontext()
+
+    return torch.autocast("cuda")
+
+
+def without_autocast(disable=False):
+    return torch.autocast("cuda", enabled=False) if torch.is_autocast_enabled() and not disable else contextlib.nullcontext()
+
+
+class NansException(Exception):
+    pass
+
+
+def test_for_nans(x, where):
+    if not torch.all(torch.isnan(x)).item():
+        return
+
+    if where == "unet":
+        message = "A tensor with all NaNs was produced in Unet."
+
+    elif where == "vae":
+        message = "A tensor with all NaNs was produced in VAE."
+
+    else:
+        message = "A tensor with all NaNs was produced."
+
+    message += " Use --disable-nan-check commandline argument to disable this check."
+
+    raise NansException(message)
+
+
+@lru_cache
+def first_time_calculation():
+    """
+    just do any calculation with pytorch layers - the first time this is done it allocaltes about 700MB of memory and
+    spends about 2.7 seconds doing that, at least wih NVidia.
+    """
+
+    x = torch.zeros((1, 1)).to(device, dtype)
+    linear = torch.nn.Linear(1, 1).to(device, dtype)
+    linear(x)
+
+    x = torch.zeros((1, 1, 3, 3)).to(device, dtype)
+    conv2d = torch.nn.Conv2d(1, 1, (3, 3)).to(device, dtype)
+    conv2d(x)
+
 
 try:
     import xformers
@@ -82,7 +219,7 @@ sd_flag = False
 def get_recommend_encoder_tile_size():
     if torch.cuda.is_available():
         total_memory = torch.cuda.get_device_properties(
-            devices.device).total_memory // 2**20
+            device).total_memory // 2**20
         if total_memory > 16*1000:
             ENCODER_TILE_SIZE = 3072
         elif total_memory > 12*1000:
@@ -99,7 +236,7 @@ def get_recommend_encoder_tile_size():
 def get_recommend_decoder_tile_size():
     if torch.cuda.is_available():
         total_memory = torch.cuda.get_device_properties(
-            devices.device).total_memory // 2**20
+            device).total_memory // 2**20
         if total_memory > 30*1000:
             DECODER_TILE_SIZE = 256
         elif total_memory > 16*1000:
@@ -433,17 +570,17 @@ def perfcount(fn):
         ts = time()
 
         if torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats(devices.device)
-        devices.torch_gc()
+            torch.cuda.reset_peak_memory_stats(device)
+        torch_gc()
         gc.collect()
 
         ret = fn(*args, **kwargs)
 
-        devices.torch_gc()
+        torch_gc()
         gc.collect()
         if torch.cuda.is_available():
-            vram = torch.cuda.max_memory_allocated(devices.device) / 2**20
-            torch.cuda.reset_peak_memory_stats(devices.device)
+            vram = torch.cuda.max_memory_allocated(device) / 2**20
+            torch.cuda.reset_peak_memory_stats(device)
             print(
                 f'[Tiled VAE]: Done in {time() - ts:.3f}s, max VRAM alloc {vram:.3f} MB')
         else:
@@ -550,7 +687,7 @@ class VAEHook:
         original_device = next(self.net.parameters()).device
         try:
             if self.to_gpu:
-                self.net.to(devices.get_optimal_device())
+                self.net.to(get_optimal_device())
             if max(H, W) <= self.pad * 2 + self.tile_size:
                 print("[Tiled VAE]: the input size is tiny and unnecessary to tile.")
                 out = self.net.original_forward(x)
@@ -672,7 +809,7 @@ class VAEHook:
             else:
                 tile = task[1](tile)
             try:
-                devices.test_for_nans(tile, "vae")
+                test_for_nans(tile, "vae")
             except:
                 print(f'Nan detected in fast mode estimation. Fast mode disabled.')
                 return False
@@ -743,7 +880,7 @@ class VAEHook:
         result = None
         result_approx = None
         #try:
-        #    with devices.autocast():
+        #    with autocast():
         #        result_approx = torch.cat([F.interpolate(cheap_approximation(x).unsqueeze(0), scale_factor=opt_f, mode='nearest-exact') for x in z], dim=0).cpu()
         #except: pass
         # Free memory of input latent tensor
@@ -797,7 +934,7 @@ class VAEHook:
 
                 # check for NaNs in the tile.
                 # If there are NaNs, we abort the process to save user's time
-                #devices.test_for_nans(tile, "vae")
+                # test_for_nans(tile, "vae")
 
                 #print(tiles[i].shape, tile.shape, i, num_tiles)
                 if len(task_queue) == 0:
