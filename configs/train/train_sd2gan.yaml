@@ -29,10 +29,30 @@ dataset:
       use_hflip: False
     batch_transform:
       target: gqvr.dataset.batch_transform.IdentityBatchTransform
-        
+
+# qVAE config:    
+model:
+  vae_cfg:
+    embed_dim: 4
+    ddconfig:
+      double_z: true
+      z_channels: 4
+      resolution: 512
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult:
+      - 1
+      - 2
+      - 4
+      - 4
+      num_res_blocks: 2
+      attn_resolutions: []
+      dropout: 0.0
+
 
 base_model_type: sd2
-base_model_path: /home/argar/apgi/gQVR/pretrained_checkpoints/sd2.1-base-zsnr-laionaes5.ckpt
+base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
 qvae_path: /home/argar/apgi/gQVR/experiments/3bit_vae_10xlr_8xBS/0600000.pt
 model_t: 200
 coeff_t: 200
