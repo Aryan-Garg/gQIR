@@ -23,6 +23,7 @@ from diffusers import AutoencoderKL
 from PIL import Image
 
 from gqvr.model.discriminator import ImageConvNextDiscriminator
+from gqvr.model.vae import AutoencoderKL
 from gqvr.utils.common import instantiate_from_config, log_txt_as_img, print_vram_state, SuppressLogging
 from gqvr.utils.ema import EMAModel
 from gqvr.utils.tabulate import tabulate
@@ -118,12 +119,9 @@ class BaseTrainer:
         ...
 
     def init_vae(self):
-        self.vae = AutoencoderKL.from_pretrained(
-            self.config.base_model_path, subfolder="vae", torch_dtype=self.weight_dtype)
-        
+        self.vae = AutoencoderKL(self.config.model.vae_cfg.ddconfig, self.config.model.vae_cfg.embed_dim)       
         # Load quanta VAE
         daVAE = torch.load(self.config.qvae_path, map_location="cpu")
-
         init_vae = {}
         vae_used = set()
         scratch_vae = self.vae.state_dict()
@@ -134,10 +132,15 @@ class BaseTrainer:
             # print(f"Found {key} in daVAE. Loading...")
             init_vae[key] = daVAE[key].clone()
             vae_used.add(key)
-            self.vae.load_state_dict(init_vae, strict=False)
+        self.vae.load_state_dict(init_vae, strict=True)
         ####
         vae_unused = set(daVAE.keys()) - vae_used
-        print(f"[!] VAE keys NOT used: {vae_unused}")
+        
+        if len(vae_unused) == 0:
+            print(f"Loaded qVAE successfully")
+        else:
+            print(f"[!] VAE keys NOT used: {vae_unused}")
+            
         self.vae.eval().requires_grad_(False)
 
     def init_lpips(self):
