@@ -388,3 +388,29 @@ def calculate_psnr_pt(img, img2, crop_border, test_y_channel=False):
 
     mse = torch.mean((img - img2) ** 2, dim=[1, 2, 3])
     return 10.0 * torch.log10(1.0 / (mse + 1e-8))
+
+
+
+def print_vram_state(msg, logger=None):
+    alloc = torch.cuda.memory_allocated() / 1024**3
+    cache = torch.cuda.memory_reserved() / 1024**3
+    peak = torch.cuda.max_memory_allocated() / 1024**3
+    if logger:
+        logger.info(
+            f"[GPU memory]: {msg}, allocated = {alloc:.2f} GB, "
+            f"cached = {cache:.2f} GB, peak = {peak:.2f} GB"
+        )
+    return alloc, cache, peak
+
+import logging
+class SuppressLogging:
+
+    def __init__(self, level=logging.CRITICAL):
+        self.level = level
+        self.original_level = logging.getLogger().level
+
+    def __enter__(self):
+        logging.getLogger().setLevel(self.level)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        logging.getLogger().setLevel(self.original_level)
