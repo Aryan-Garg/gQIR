@@ -1,5 +1,6 @@
 from abc import abstractmethod
 import math
+from typing import Tuple, Set, List, Dict
 
 import numpy as np
 import torch as th
@@ -854,6 +855,32 @@ class UNetModel(nn.Module):
             conv_nd(dims, model_channels, n_embed, 1),
             #nn.LogSoftmax(dim=1)  # change to cross_entropy and produce non-normalized logits
         )
+
+
+    @th.no_grad()
+    def load_from_pretrained_sd(self, sd: Dict[str, th.Tensor]):
+        module_map = {
+            "unet": "model.diffusion_model",
+            "vae": "first_stage_model",
+            "clip": "cond_stage_model",
+        }
+        modules = [("unet", self.unet)]
+        used = set()
+        missing = set()
+        for name, module in modules:
+            init_sd = {}
+            scratch_sd = module.state_dict()
+            for key in scratch_sd:
+                target_key = ".".join([module_map[name], key])
+                if target_key not in sd:
+                    missing.add(target_key)
+                    continue
+                init_sd[key] = sd[target_key].clone()
+                used.add(target_key)
+            module.load_state_dict(init_sd, strict=False)
+        unused = set(sd.keys()) - used
+        return unused, missing
+
 
     def convert_to_fp16(self):
         """

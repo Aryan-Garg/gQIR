@@ -12,10 +12,10 @@ from einops import rearrange
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 
-from gqvr.model import ControlLDM, Diffusion
+from gqvr.model import ControlLDM
 from gqvr.utils.common import instantiate_from_config, to, log_txt_as_img
-from gqvr.sampler import SpacedSampler, DPMSolverSampler
-
+from gqvr.model.openaimodel import UNetModel
+from gqvr.model.discriminator import ImageConvNextDiscriminator
 
 def main(args) -> None:
     # Setup accelerator:
@@ -33,10 +33,10 @@ def main(args) -> None:
         print(f"Experiment directory created at {exp_dir}")
 
     # Create model:
-    cldm: ControlLDM = instantiate_from_config(cfg.model.cldm)
+    unet: UNetModel = instantiate_from_config(cfg.model.cldm.unet_cfg)
     sd = torch.load(cfg.train.sd_path, map_location="cpu")["state_dict"]
     daVAE = torch.load(cfg.train.vae_path, map_location="cpu")
-    unused, missing = cldm.load_pretrained_sd(sd, daVAE)
+    unused, missing = unet.load_pretrained_sd(sd, daVAE)
     
     if accelerator.is_main_process:
         print(
@@ -47,24 +47,16 @@ def main(args) -> None:
         print("[+] Unused should have all first_stage_model weights since custom VAE weights were loaded.")
 
     if cfg.train.resume:
-        cldm.load_controlnet_from_ckpt(torch.load(cfg.train.resume, map_location="cpu"))
+        unet.load_from_ckpt(torch.load(cfg.train.resume, map_location="cpu"))
         if accelerator.is_main_process:
             print(
                 f"Load controlnet weight from checkpoint: {cfg.train.resume}"
             )
-    else:
-        init_with_new_zero, init_with_scratch = cldm.load_controlnet_from_unet()
-        if accelerator.is_main_process:
-            print(
-                f"Load controlnet weight from pretrained SD\n"
-                f"weights initialized with newly added zeros: {init_with_new_zero}\n"
-                f"weights initialized from scratch: {init_with_scratch}"
-            )
 
-    diffusion: Diffusion = instantiate_from_config(cfg.model.diffusion)
-
+    discriminator: ImageConvNextDiscriminator = ImageConvNextDiscriminator()
     # Setup optimizer:
-    opt = torch.optim.AdamW(cldm.controlnet.parameters(), lr=cfg.train.learning_rate)
+    opt = torch.optim.AdamW(unet.parameters(), lr=cfg.train.learning_rate)
+    opt_D = torch.optim.AdamW(discriminator.parameters(), lr=cfg.train.learning_rate)
 
     # Setup data:
     dataset = instantiate_from_config(cfg.dataset.train)
@@ -83,7 +75,6 @@ def main(args) -> None:
 
     # Prepare models for training:
     cldm.train().to(device)
-    diffusion.to(device)
     cldm, opt, loader = accelerator.prepare(cldm, opt, loader)
     pure_cldm: ControlLDM = accelerator.unwrap_model(cldm)
     noise_aug_timestep = cfg.train.noise_aug_timestep

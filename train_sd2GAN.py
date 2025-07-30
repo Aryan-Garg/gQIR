@@ -90,7 +90,7 @@ class SD2Trainer(BaseTrainer):
             encoder_hidden_states=self.batch_inputs.c_txt["text_embed"],
         ).sample
         z = self.scheduler.step(eps, self.config.coeff_t, z_in).pred_original_sample
-        x = self.vae.decode(z.to(self.weight_dtype) / 0.18215).sample.float()
+        x = self.vae.decode(z.to(self.weight_dtype) / 0.18215).float()
         return x
     
 

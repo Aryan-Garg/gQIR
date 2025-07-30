@@ -17,10 +17,14 @@ from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
 from tqdm.auto import tqdm
 import transformers
+from transformers import AutoModel, AutoTokenizer, AutoConfig
 import lpips
 import diffusers
 from diffusers import AutoencoderKL
 from PIL import Image
+import math
+from torchvision.transforms.functional import InterpolationMode
+import torchvision.transforms as T
 
 from gqvr.model.discriminator import ImageConvNextDiscriminator
 from gqvr.model.vae import AutoencoderKL
@@ -51,6 +55,46 @@ class BatchInput:
             self.__dict__[name] = value
 
 
+############################## For internVL3-8B ##########################################
+def split_model(model_name):
+    device_map = {}
+    world_size = torch.cuda.device_count()
+    config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+    num_layers = config.llm_config.num_hidden_layers
+    # Since each GPU will be used for SD as well, treat it as half a GPU.
+    num_layers_per_gpu = math.ceil(num_layers / (world_size - 0.5))
+    num_layers_per_gpu = [num_layers_per_gpu] * world_size
+    num_layers_per_gpu[0] = math.ceil(num_layers_per_gpu[0] * 0.5)
+    layer_cnt = 0
+    for i, num_layer in enumerate(num_layers_per_gpu):
+        for j in range(num_layer):
+            device_map[f'language_model.model.layers.{layer_cnt}'] = i
+            layer_cnt += 1
+    device_map['vision_model'] = 0
+    device_map['mlp1'] = 0
+    device_map['language_model.model.tok_embeddings'] = 0
+    device_map['language_model.model.embed_tokens'] = 0
+    device_map['language_model.output'] = 0
+    device_map['language_model.model.norm'] = 0
+    device_map['language_model.model.rotary_emb'] = 0
+    device_map['language_model.lm_head'] = 0
+    device_map[f'language_model.model.layers.{num_layers - 1}'] = 0
+
+    return device_map
+
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+
+def build_transform(input_size=448):
+    MEAN, STD = IMAGENET_MEAN, IMAGENET_STD
+    transform = T.Compose([
+        T.Resize((input_size, input_size), interpolation=InterpolationMode.BICUBIC),
+        T.Normalize(mean=MEAN, std=STD)
+    ])
+    return transform
+
+##########################################################################################
+
 class BaseTrainer:
 
     def __init__(self, config):
@@ -70,7 +114,8 @@ class BaseTrainer:
             gradient_accumulation_steps=self.config.gradient_accumulation_steps,
             log_with=self.config.report_to,
             project_config=accelerator_project_config,
-            mixed_precision=self.config.mixed_precision,
+            # mixed_precision=self.config.mixed_precision,
+            split_batches=True
         )
         logger.info(accelerator.state, main_process_only=True)
         if accelerator.is_main_process:
@@ -105,6 +150,22 @@ class BaseTrainer:
         self.init_generator()
         self.init_discriminator()
         self.init_lpips()
+        # self.init_internVL() # TODO: Fix this pipeline for with prompt training.
+
+    def init_internVL(self):
+        path = 'OpenGVLab/InternVL3-8B'
+        device_map = split_model('OpenGVLab/InternVL3-8B')
+        self.internVL3 = AutoModel.from_pretrained(
+            path,
+            torch_dtype=torch.bfloat16,
+            load_in_8bit=False,
+            low_cpu_mem_usage=True,
+            use_flash_attn=True,
+            device_map=device_map,
+            trust_remote_code=True,
+            token="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").eval().requires_grad_(False)
+        self.internVL_tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True, use_fast=False)
+        self.internVL_transform = build_transform()
 
     @overload
     def init_scheduler(self):
@@ -133,14 +194,14 @@ class BaseTrainer:
             init_vae[key] = daVAE[key].clone()
             vae_used.add(key)
         self.vae.load_state_dict(init_vae, strict=True)
-        ####
+        self.vae.to(device=self.device)
         vae_unused = set(daVAE.keys()) - vae_used
         
         if len(vae_unused) == 0:
             print(f"Loaded qVAE successfully")
         else:
             print(f"[!] VAE keys NOT used: {vae_unused}")
-            
+
         self.vae.eval().requires_grad_(False)
 
     def init_lpips(self):
@@ -162,7 +223,7 @@ class BaseTrainer:
             else SuppressLogging(logging.WARNING)
         )
         with ctx:
-            self.D = ImageConvNextDiscriminator(precision="bf16").to(device=self.device)
+            self.D = ImageConvNextDiscriminator().to(device=self.device)
         self.D.train().requires_grad_(True)
 
     def summary_models(self):
@@ -274,12 +335,26 @@ class BaseTrainer:
             disable=not self.accelerator.is_main_process,
         )
 
+    def get_internVL_prompt(self, gt):
+        generation_config = dict(max_new_tokens=512, do_sample=True)
+        responses = []
+        for i in range(gt.size(dim=0)):
+            pixel_values = self.internVL_transform(gt[i].to(torch.bfloat16).permute(2,0,1)).to(self.device)
+            question = '<image>\nPlease describe the image in detail in a single paragraph.'
+            responses.append(self.internVL3.chat(self.internVL_tokenizer, pixel_values, question, generation_config = generation_config))
+        return responses
+
     def prepare_batch_inputs(self, batch):
         batch = self.batch_transform(batch)
         gt, lq, prompt = batch
-        # gt = (batch["GT"] * 2 - 1).float()
-        # lq = (batch["LQ"] * 2 - 1).float()
-        prompt = batch["txt"]
+
+        gt = gt.permute(0, 3, 1, 2) # N C H W
+        lq = lq.permute(0, 3, 1, 2)
+
+        # TODO: For prompt taining
+        # gt_copy = gt.clone().detach()
+        # prompt = self.get_internVL_prompt(gt_copy)
+
         bs = len(prompt)
         c_txt = self.encode_prompt(prompt)
         # NOTE:
@@ -288,7 +363,8 @@ class BaseTrainer:
         z_lq = self.vae.encode(lq.to(self.weight_dtype)).mode() 
         timesteps = torch.full((bs,), self.config.model_t, dtype=torch.long, device=self.device)
         self.batch_inputs = BatchInput(
-            gt=gt, lq=lq,
+            gt=gt, 
+            lq=lq,
             z_lq=z_lq,
             c_txt=c_txt,
             timesteps=timesteps,
@@ -313,6 +389,8 @@ class BaseTrainer:
                 self.accelerator.clip_grad_norm_(self.G_params, self.config.max_grad_norm)
             self.G_opt.step()
             self.G_opt.zero_grad()
+            self.accelerator.wait_for_everyone()
+            
         # Log something
         loss_dict = dict(G_total=loss_G, G_mse=loss_l2, G_lpips=loss_lpips, G_disc=loss_disc)
         return loss_dict
@@ -327,11 +405,14 @@ class BaseTrainer:
             loss_D_real, real_logits = self.D(gt, for_real=True, return_logits=True)
             loss_D_fake, fake_logits = self.D(x, for_real=False, return_logits=True)
             loss_D = loss_D_real.mean() + loss_D_fake.mean()
+        
             self.accelerator.backward(loss_D)
             if self.accelerator.sync_gradients:
                 self.accelerator.clip_grad_norm_(self.D_params, self.config.max_grad_norm)
             self.D_opt.step()
             self.D_opt.zero_grad()
+            self.accelerator.wait_for_everyone()
+        
         loss_dict = dict(D=loss_D)
         # logits = D(x) w/o sigmoid = log(p_real(x) / p_fake(x))
         with torch.no_grad():
@@ -354,7 +435,7 @@ class BaseTrainer:
                     loss_dict = self.optimize_generator()
                 else:
                     loss_dict = self.optimize_discriminator()
-
+                
                 for k, v in loss_dict.items():
                     avg_loss = self.accelerator.gather(v.repeat(bs)).mean()
                     if k not in train_loss:
@@ -455,19 +536,20 @@ class BaseTrainer:
 
     def save_checkpoint(self):
         if self.accelerator.is_main_process:
-            if self.config.checkpoints_total_limit is not None:
-                checkpoints = os.listdir(self.config.output_dir)
-                checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
-                checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
-                if len(checkpoints) >= self.config.checkpoints_total_limit:
-                    num_to_remove = len(checkpoints) - self.config.checkpoints_total_limit + 1
-                    removing_checkpoints = checkpoints[0:num_to_remove]
-                    logger.info(f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints")
-                    logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
-                    for removing_checkpoint in removing_checkpoints:
-                        removing_checkpoint = os.path.join(self.config.output_dir, removing_checkpoint)
-                        shutil.rmtree(removing_checkpoint)
-            save_path = os.path.join(self.config.output_dir, f"checkpoint-{self.global_step}")
+            # print("self.config.checkpoints_total_limit:",self.config.checkpoints_total_limit)
+            # if self.config.checkpoints_total_limit is not None:
+            #     checkpoints = os.listdir(self.config.output_dir)
+            #     checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
+            #     checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
+            #     if len(checkpoints) >= self.config.checkpoints_total_limit:
+            #         num_to_remove = len(checkpoints) - self.config.checkpoints_total_limit + 1
+            #         removing_checkpoints = checkpoints[0:num_to_remove]
+            #         logger.info(f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints")
+            #         logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
+            #         for removing_checkpoint in removing_checkpoints:
+            #             removing_checkpoint = os.path.join(self.config.output_dir, removing_checkpoint)
+            #             shutil.rmtree(removing_checkpoint)
+            save_path = os.path.join(self.config.output_dir, "checkpoints", f"checkpoint-{self.global_step}")
             self.accelerator.save_state(save_path)
             logger.info(f"Saved state to {save_path}")
 
