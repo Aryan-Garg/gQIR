@@ -72,7 +72,7 @@ opt_kwargs:
   betas: [0.9, 0.999]
 
 mixed_precision: bf16
-seed: 310
+seed: 0310
 max_train_steps: 50000
 gradient_accumulation_steps: 4
 gradient_checkpointing: true
