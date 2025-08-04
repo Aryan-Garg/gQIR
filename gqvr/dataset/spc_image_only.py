@@ -159,7 +159,7 @@ class SPCDataset(data.Dataset):
         # [-1, 1]
         lq = (img_lq * 2 - 1).astype(np.float32) 
         # print(np.amax(lq), np.amin(lq))
-        return gt, lq, prompt
+        return gt, lq, prompt, gt_path
 
 
     def __len__(self) -> int:

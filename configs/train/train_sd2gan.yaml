@@ -50,7 +50,7 @@ model:
       attn_resolutions: []
       dropout: 0.0
 
-
+prompt_training: true
 base_model_type: sd2
 base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
 qvae_path: /home/argar/apgi/gQVR/experiments/3bit_vae_10xlr_8xBS/0600000.pt
@@ -72,16 +72,16 @@ opt_kwargs:
   betas: [0.9, 0.999]
 
 mixed_precision: bf16
-seed: 0310
+seed: 310
 max_train_steps: 50000
 gradient_accumulation_steps: 4
 gradient_checkpointing: true
 max_grad_norm: 1.0
 logging_dir: logs
 report_to: tensorboard
-checkpointing_steps: 500
+checkpointing_steps: 1000
 checkpoints_total_limit: None
 resume_from_checkpoint: ~
-log_image_steps: 250
+log_image_steps: 500
 log_grad_steps: 250
 log_grad_modules: [conv_out]

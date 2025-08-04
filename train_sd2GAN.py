@@ -98,6 +98,7 @@ parser = ArgumentParser()
 parser.add_argument("--config", type=str, required=True)
 args = parser.parse_args()
 config = OmegaConf.load(args.config)
+
 if config.base_model_type == "sd2":
     trainer = SD2Trainer(config)
     trainer.run()

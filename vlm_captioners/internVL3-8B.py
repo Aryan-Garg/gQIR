@@ -116,7 +116,7 @@ def split_model(model_name):
 # If you set `load_in_8bit=True`, you will need two 80GB GPUs.
 # If you set `load_in_8bit=False`, you will need at least three 80GB GPUs.
 path = 'OpenGVLab/InternVL3-8B'
-device_map = split_model('OpenGVLab/InternVL3-8B')
+# device_map = split_model('OpenGVLab/InternVL3-8B')
 model = AutoModel.from_pretrained(
     path,
     torch_dtype=torch.bfloat16,
@@ -124,129 +124,38 @@ model = AutoModel.from_pretrained(
     low_cpu_mem_usage=True,
     use_flash_attn=True,
     trust_remote_code=True,
-    device_map=device_map,
-    token="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").eval()
+    # device_map=device_map,
+    token="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").eval().cuda()
 tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True, use_fast=False)
 
 
-I2_PATH = "../i2_2000fps/extracted" 
-VISIONSIM_PATH = "../visionsim50"
-XVFI_PATH = "../xvfi"
+COMBINED_DATASET_FILE = "/home/argar/apgi/gQVR/dataset_txt_files/combined_dataset.txt"
+OUTPUT_FILE = "/home/argar/apgi/gQVR/dataset_txt_files/combined_prompts_dataset.txt"
+HARDDISK_DIR = "/mnt/disks/behemoth/datasets/"
+def start_writing_prompts(start_idx):
+    generation_config = dict(max_new_tokens=256, do_sample=True)
+    with open(COMBINED_DATASET_FILE, "r") as f:
+        lines = [line.strip() for line in f.readlines()]
+    lines = lines[start_idx:min(len(lines), start_idx + 343343)]
 
-def generate_prompts_for_i2(base_path=I2_PATH):
-    generation_config = dict(max_new_tokens=1024, do_sample=True)
-    for sub_dir in tqdm(os.listdir(base_path)):
-        if os.path.exists(base_path, f'{sub_dir}.json'):
-            continue
-        sub_dir_path = os.path.join(base_path, sub_dir)
-        if not os.path.isdir(sub_dir_path):
-            continue
-        for img in os.listdir(sub_dir_path):
-            img_path = os.path.join(sub_dir_path, img)
-            if not img.endswith('.png'):
-                continue
-            pixel_values = load_image(img_path, max_num=12).to(torch.bfloat16).cuda()
+    for img_path in tqdm(lines):
+        img_path_full = HARDDISK_DIR + img_path[2:]
+        try:
+            pixel_values = load_image(img_path_full, max_num=12).to(torch.bfloat16).cuda()
+            print(pixel_values.size())
             question = '<image>\nPlease describe the image in detail in a single paragraph.'
             response = model.chat(tokenizer, pixel_values, question, generation_config = generation_config)
-            # append this {img_path: response} to a json file instantly instead of dumping all at once
-            with open(os.path.join(base_path, f'{sub_dir}.json'), 'a') as f:
-                json.dump({img_path: response}, f, indent=4)
-
-
-
-
-def generate_prompts_for_visionsim(base_path=VISIONSIM_PATH):
-    generation_config = dict(max_new_tokens=1024, do_sample=True)
-    for scene_name in tqdm(os.listdir(base_path)):
-        scene_path = os.path.join(base_path, scene_name)
-        if not os.path.isdir(scene_path):
-            continue
-        for sub_dir in os.listdir(scene_path):
-            if "frames" not in sub_dir and "spc" in sub_dir:
-                continue
-            if "flow" in sub_dir:
-                continue
-            if "4x" in sub_dir:
-                continue
-            if os.path.exists(os.path.join(scene_path, f'{sub_dir}.json')):
-                continue
-            sub_dir_path = os.path.join(scene_path, sub_dir, "frames")
-            if not os.path.isdir(sub_dir_path):
-                continue
-            for img in os.listdir(sub_dir_path):
-                img_path = os.path.join(sub_dir_path, img)
-                if not img.endswith('.png'):
-                    continue
-                pixel_values = load_image(img_path, max_num=12).to(torch.bfloat16).cuda()
-                question = '<image>\nPlease describe the image in detail in a single paragraph.'
-                response = model.chat(tokenizer, pixel_values, question, generation_config = generation_config)
-                with open(os.path.join(scene_path, f'{sub_dir}.json'), 'a') as f:
-                    json.dump({img_path: response}, f, indent=4)
-
-
-
-def generate_prompts_for_xvfi(base_path=XVFI_PATH):
-    generation_config = dict(max_new_tokens=1024, do_sample=True)
-    DIRS = ["val", "test"]
-    for dir_name in DIRS:
-        dir_path = os.path.join(base_path, dir_name)
-        for sub_dir in tqdm(os.listdir(dir_path)):
-            sub_dir_path = os.path.join(dir_path, sub_dir)
-            for ss_dir in os.listdir(sub_dir_path):
-                if os.path.exists(os.path.join(sub_dir_path, f'{ss_dir}.json')):
-                    continue
-                if not os.path.isdir(os.path.join(sub_dir_path, ss_dir)):
-                    continue
-                ss_path = os.path.join(sub_dir_path, ss_dir)
-                if not os.path.isdir(ss_path):
-                    continue
-
-                for img in os.listdir(ss_path):
-                    img_path = os.path.join(ss_path, img)
-                    if not img.endswith('.png'):
-                        continue
-                    pixel_values = load_image(img_path, max_num=12).to(torch.bfloat16).cuda()
-                    question = '<image>\nPlease describe the image in detail in a single paragraph.'
-                    response = model.chat(tokenizer, pixel_values, question, generation_config = generation_config)
-
-                    with open(os.path.join(sub_dir_path, f'{ss_dir}.json'), 'a') as f:
-                        json.dump({img_path: response}, f, indent=4)
+            with open(OUTPUT_FILE, "a") as q:
+                q.write(f"{img_path} {str(response)}\n")
+        except Exception as e:
+            print(f"[!] Failed to write a prompt for {img_path}: {e}")
     
-    TRAIN_DIR = os.path.join(base_path, "train")
-    for dr in tqdm(os.listdir(TRAIN_DIR)):
-        if not os.path.isdir(os.path.join(TRAIN_DIR, dr)):
-            continue
-        dr_path = os.path.join(TRAIN_DIR, dr)
-        for sdr in os.listdir(dr_path):
-            if os.path.exists(os.path.join(dr_path, f'{sdr}.json')):
-                continue
-            if not os.path.isdir(os.path.join(dr_path, sdr)):
-                continue
-
-            for img in os.listdir(os.path.join(dr_path, sdr)):
-                img_path = os.path.join(dr_path, sdr, img)
-                if not img.endswith('.png'):
-                    continue
-                pixel_values = load_image(img_path, max_num=12).to(torch.bfloat16).cuda()
-                question = '<image>\nPlease describe the image in detail in a single paragraph.'
-                response = model.chat(tokenizer, pixel_values, question, generation_config = generation_config)
-        
-                with open(os.path.join(dr_path, f'{sdr}.json'), 'a') as f:
-                    json.dump({img_path: response}, f, indent=4)
 
 import argparse
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate prompts for InternVL3-8B")
-    parser.add_argument('--i2', action='store_true', help='Generate prompts for I2 dataset')
-    parser.add_argument('--visionsim', action='store_true', help='Generate prompts for VisionSim dataset')
-    parser.add_argument('--xvfi', action='store_true', help='Generate prompts for XVFI dataset')
+    parser.add_argument('--start', type=int, required=True, help="Start index or line number")
+    # parser.add_argument('--end', type=int, required=False, help="End index or line number")
     args = parser.parse_args()
-    if args.i2:
-        print("Generating prompts for I2 dataset...")
-        generate_prompts_for_i2(base_path=I2_PATH)
-    if args.visionsim:
-        print("Generating prompts for VisionSim dataset...")
-        generate_prompts_for_visionsim(base_path=VISIONSIM_PATH)
-    if args.xvfi:
-        print("Generating prompts for XVFI dataset...")
-        generate_prompts_for_xvfi(base_path=XVFI_PATH)
+
+    start_writing_prompts(args.start)
