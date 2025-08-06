@@ -60,7 +60,7 @@ Please cite us if our work is useful for your research.
 
 ```bibtex
 @misc{garg2025_gqvr
-    title={g-QVR: Generative Quanta Video Restoration},
+    title={gQVR: Generative Quanta Video Restoration},
     author={Aryan Garg and Sizhuo Ma and Mohit Gupta},
     year={2025},
     eprint={},
@@ -74,7 +74,7 @@ Please cite us if our work is useful for your research.
 
 ## <a id="acknowledgements"></a>Acknowledgements
 
-This project is based on [ControlNet](https://github.com/lllyasviel/ControlNet) and [XPixelGroup](https://xpixel.group/)'s projects: [BasicSR](https://github.com/XPixelGroup/BasicSR) and [DiffBIR](https://github.com/XPixelGroup/DiffBIR). Thanks for their amazing work.
+This project is based on [XPixelGroup](https://xpixel.group/)'s projects: [DiffBIR](https://github.com/XPixelGroup/DiffBIR) and [HYPIR](https://github.com/XPixelGroup/HYPIR). Thanks for their amazing work.
 
 ## <a name="contact"></a>Contact
 
