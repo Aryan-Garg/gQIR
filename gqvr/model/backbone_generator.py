@@ -20,6 +20,7 @@ class BaseEnhancer:
         lora_rank,
         model_t,
         coeff_t,
+        vae_cfg,
         device,
     ):
         self.base_model_path = base_model_path
@@ -28,6 +29,7 @@ class BaseEnhancer:
         self.lora_rank = lora_rank
         self.model_t = model_t
         self.coeff_t = coeff_t
+        self.vae_cfg = vae_cfg
 
         self.weight_dtype = torch.bfloat16
         self.device = device
@@ -46,10 +48,9 @@ class BaseEnhancer:
     def init_text_models(self):
         ...
 
+    @overload
     def init_vae(self):
-        self.vae = AutoencoderKL.from_pretrained(
-            self.base_model_path, subfolder="vae", torch_dtype=self.weight_dtype).to(self.device)
-        self.vae.eval().requires_grad_(False)
+        ...
 
     @overload
     def init_generator(self):
@@ -64,7 +65,33 @@ class BaseEnhancer:
         ...
 
     @torch.no_grad()
-    def enhance(
+    def enhance(self,
+            lq: torch.Tensor,
+            prompt: str,
+            upscale: int = 1,
+            return_type: Literal["pt", "np", "pil"] = "pt"):
+        
+        bs = len(lq)
+        
+        # VAE encoding
+        lq = (lq * 2 - 1).to(dtype=self.weight_dtype, device=self.device)
+        self.prepare_inputs(batch_size=bs, prompt=prompt)
+
+        z_lq = self.vae.encode(lq.to(self.weight_dtype)).mode() 
+        z = self.forward_generator(z_lq) # (N x 4 x 64 x 64) for (N, 3, 512, 512) input
+        # print(f"[DEBUG] z shape: {z.shape}")
+        x = self.vae.decode(z.to(self.weight_dtype)).float()
+
+        if return_type == "pt":
+            return x.clamp(0, 1).cpu()
+        elif return_type == "np":
+            return self.tensor2image(x)
+        else:
+            return [Image.fromarray(img) for img in self.tensor2image(x)]
+    
+    # BUG: Doesn't work with tiled vae right now
+    @torch.no_grad()
+    def enhance_tiled(
         self,
         lq: torch.Tensor,
         prompt: str,
@@ -96,7 +123,7 @@ class BaseEnhancer:
             tile_size=patch_size,
             dtype=self.weight_dtype,
         ):
-            z_lq = self.vae.encode(lq.to(self.weight_dtype)).latent_dist.sample()
+            z_lq = self.vae.encode(lq.to(self.weight_dtype)).mode()
 
         # Generator forward
         self.prepare_inputs(batch_size=bs, prompt=prompt)
@@ -104,8 +131,7 @@ class BaseEnhancer:
             fn=lambda z_lq_tile: self.forward_generator(z_lq_tile),
             size=patch_size // vae_scale_factor,
             stride=patch_size // 2 // vae_scale_factor,
-            progress=True,
-            desc="Generator Forward",
+            progress=True
         )(z_lq)
         with enable_tiled_vae(
             self.vae,
@@ -113,7 +139,7 @@ class BaseEnhancer:
             tile_size=patch_size // vae_scale_factor,
             dtype=self.weight_dtype,
         ):
-            x = self.vae.decode(z.to(self.weight_dtype)).sample.float()
+            x = self.vae.decode(z.to(self.weight_dtype)).float()
         x = x[..., :h1, :w1]
         x = (x + 1) / 2
         x = F.interpolate(input=x, size=(h0, w0), mode="bicubic", antialias=True)
@@ -129,10 +155,7 @@ class BaseEnhancer:
     @staticmethod
     def tensor2image(img_tensor):
         return (
-            (img_tensor * 255.0)
-            .clamp(0, 255)
-            .to(torch.uint8)
-            .permute(0, 2, 3, 1)
+            (((img_tensor + 1) / 2) * 255.0).clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1)
             .contiguous()
             .cpu()
             .numpy()

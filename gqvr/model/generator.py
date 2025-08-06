@@ -4,7 +4,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 from peft import LoraConfig
 
 from .backbone_generator import BaseEnhancer
-
+from gqvr.model.vae import AutoencoderKL
 
 class SD2Enhancer(BaseEnhancer):
 
@@ -36,6 +36,31 @@ class SD2Enhancer(BaseEnhancer):
 
         self.G.eval().requires_grad_(False)
 
+    def init_vae(self):
+        self.vae = AutoencoderKL(self.vae_cfg.ddconfig, self.vae_cfg.embed_dim)       
+        # Load quanta VAE
+        daVAE = torch.load(self.vae_cfg.qvae_path, map_location="cpu")
+        init_vae = {}
+        vae_used = set()
+        scratch_vae = self.vae.state_dict()
+        for key in scratch_vae:
+            if key not in daVAE:
+                print(f"[!] {key} missing in daVAE")
+                continue
+            # print(f"Found {key} in daVAE. Loading...")
+            init_vae[key] = daVAE[key].clone()
+            vae_used.add(key)
+        self.vae.load_state_dict(init_vae, strict=True)
+        self.vae.to(device=self.device).to(self.weight_dtype)
+        vae_unused = set(daVAE.keys()) - vae_used
+        
+        if len(vae_unused) == 0:
+            print(f"[+] Loaded qVAE successfully\n")
+        else:
+            print(f"[!] VAE keys NOT used: {vae_unused}\n")
+
+        self.vae.eval().requires_grad_(False)
+
     def prepare_inputs(self, batch_size, prompt):
         bs = batch_size
         txt_ids = self.tokenizer(
@@ -56,9 +81,10 @@ class SD2Enhancer(BaseEnhancer):
     def forward_generator(self, z_lq):
         z_in = z_lq * 0.18215 # Use self.vae.config.scaling_factor if using diffusers
         eps = self.G(
-            z_in, self.inputs["timesteps"],
+            z_in, 
+            self.inputs["timesteps"],
             encoder_hidden_states=self.inputs["c_txt"]["text_embed"],
         ).sample
         z = self.scheduler.step(eps, self.coeff_t, z_in).pred_original_sample
-        z_out = z / 0.18215 # VAE's scaling factor
+        z_out = z.to(self.weight_dtype) / 0.18215 # VAE's scaling factor
         return z_out
