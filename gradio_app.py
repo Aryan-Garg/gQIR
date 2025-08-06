@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from PIL import Image
 
 from gqvr.model.generator import SD2Enhancer
-from gqvr.utils.captioner import GPTCaptioner
+# from gqvr.utils.captioner import GPTCaptioner
 
 
 load_dotenv()
@@ -20,7 +20,7 @@ parser = ArgumentParser()
 parser.add_argument("--config", type=str, required=True)
 parser.add_argument("--local", action="store_true")
 parser.add_argument("--port", type=int, default=7860)
-parser.add_argument("--gpt_caption", action="store_true")
+parser.add_argument("--internvl_caption", action="store_true")
 parser.add_argument("--max_size", type=str, default=None, help="Comma-seperated image size")
 parser.add_argument("--device", type=str, default="cuda")
 args = parser.parse_args()
@@ -32,22 +32,8 @@ if max_size is not None:
         raise ValueError(f"Invalid max size: {max_size}")
     print(f"Max size set to {max_size}, max pixels: {max_size[0] * max_size[1]}")
 
-if args.gpt_caption:
-    if (
-        "GPT_API_KEY" not in os.environ
-        or "GPT_BASE_URL" not in os.environ
-        or "GPT_MODEL" not in os.environ
-    ):
-        raise ValueError(
-            "If you want to use gpt-generated caption, "
-            "please specify both `GPT_API_KEY`, `GPT_BASE_URL` and `GPT_MODEL` in your .env file. "
-            "See README.md for more details."
-        )
-    captioner = GPTCaptioner(
-        api_key=os.getenv("GPT_API_KEY"),
-        base_url=os.getenv("GPT_BASE_URL"),
-        model=os.getenv("GPT_MODEL"),
-    )
+if args.internvl_caption:
+    captioner = None
 to_tensor = transforms.ToTensor()
 
 config = OmegaConf.load(args.config)
@@ -125,7 +111,7 @@ with block:
         with gr.Column():
             image = gr.Image(type="pil")
             prompt = gr.Textbox(label=(
-                "Prompt (Input 'auto' to use gpt-generated caption)"
+                "Prompt (Input 'auto' to use internVL3-8B generated caption)"
                 if args.gpt_caption else "Prompt"
             ))
             upscale = gr.Slider(minimum=1, maximum=8, value=1, label="Upscale Factor", step=1)
