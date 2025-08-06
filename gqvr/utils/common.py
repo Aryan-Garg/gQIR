@@ -177,7 +177,7 @@ def make_tiled_fn(
     scale: int = 1,
     channel: int = 3,
     weight: Literal["uniform", "gaussian"] = "gaussian",
-    dtype = None,
+    dtype = torch.bfloat16,
     device = None,
     # callback: Callable[[int, int, int, int], None] | None = None,
     progress: bool = True,
@@ -198,7 +198,7 @@ def make_tiled_fn(
             dtype=out_dtype,
             device=out_device,
         )
-        count = torch.zeros_like(out, dtype=torch.float32)
+        count = torch.zeros_like(out, dtype=torch.bfloat16)
         weight_size = scale_fn(size)
         weights = (
             gaussian_weights(weight_size, weight_size)[None, None]
