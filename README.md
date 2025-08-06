@@ -30,8 +30,19 @@
 
 ## <a id="inference"></a>Inference 
 
+> python3 infer_sd2GAN_stage2.py --config configs/inference/eval_sd2GAN.yaml
+
 ## <a id="training"></a>Training
 <!-- Arch Image -->
+
+#### Stage 1 - SPAD-CMOS Aligned VAE:
+> accelerate launch train_daEncoder.py --config configs/train/train_daEncoder.yaml
+
+#### Stage 2 - Adversarial Training with Diffusion Initialization:
+
+> accelerate launch train_sd2GAN.py --config configs/train/train_sd2gan.yaml
+
+#### Stage 3 - Video Stabilization
 
 Currently the brightness scale/factor (proportional to PPP) is set to 1.0 for all simulations
 
