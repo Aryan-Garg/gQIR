@@ -17,7 +17,7 @@ from ..utils.common import instantiate_from_config
 
 class SPCDataset(data.Dataset):
     """
-        Dataset for finetuning the VAE's encoder and SPC-ControlNet Stages (independent of each other).
+        Dataset for finetuning the VAE's encoder and Adversarial FT Stages (independent of each other).
         Args:
             file_list (str): Path to the file list containing image paths and prompts.
             file_backend_cfg (Mapping[str, Any]): Configuration for the file backend to load images.

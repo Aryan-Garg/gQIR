@@ -28,6 +28,21 @@ def load_file_list(file_list_path: str) -> List[Dict[str, str]]:
     return files
 
 
+def load_video_file_list(file_list_path: str) -> List[Dict[str, str]]:
+    files = []
+    with open(file_list_path, "r") as fin:
+        for line in fin:
+            p = line.strip()
+            if p:
+                p = p.split(" ")
+                path = p[0]
+                prompt = ""
+                if len(p) > 1:
+                    prompt = " ".join(p[1:])
+                files.append({"video_path": path, "prompt": prompt})
+    return files
+
+
 def load_file_metas(file_metas: List[Dict[str, str]]) -> List[Dict[str, str]]:
     files = []
     for file_meta in file_metas:
