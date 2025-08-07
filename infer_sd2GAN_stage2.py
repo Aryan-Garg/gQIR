@@ -108,49 +108,53 @@ else:
 
 
 # Get GT images. TODO: Set BASE PATH to your GT video folder
-gt_video_path = "/mnt/disks/behemoth/datasets/UDM10_video/004"
-gt_imgs = []
-lq_imgs = []
-for img_name in tqdm(sorted(os.listdir(gt_video_path)), 
-                     total=len(os.listdir(gt_video_path)), 
-                     desc="Loading GT images"):
-    if img_name.endswith(".jpg") or img_name.endswith(".png"):
-        gt_img = Image.open(os.path.join(gt_video_path, img_name))
-        gt_img = gt_img.convert("RGB")
-        gt_img = center_crop_arr(gt_img, 512)  # Center Crop to 512x512
-        gt_imgs.append(gt_img) # Tx512x512x3 images [0-255]
+udm_videos = ["000", "001", "002", "003", "004", "005", "006", "007", "008", "009"]
+for udm_video in udm_videos:
+    if not os.path.exists(f"/mnt/disks/behemoth/datasets/UDM10_video/{udm_video}"):
+        raise FileNotFoundError(f"GT video folder for UDM10 video {udm_video} not found.")
+    gt_video_path = f"/mnt/disks/behemoth/datasets/UDM10_video/{udm_video}"
+    gt_imgs = []
+    lq_imgs = []
+    for img_name in tqdm(sorted(os.listdir(gt_video_path)), 
+                         total=len(os.listdir(gt_video_path)), 
+                         desc="Loading GT images"):
+        if img_name.endswith(".jpg") or img_name.endswith(".png"):
+            gt_img = Image.open(os.path.join(gt_video_path, img_name))
+            gt_img = gt_img.convert("RGB")
+            gt_img = center_crop_arr(gt_img, 512)  # Center Crop to 512x512
+            gt_imgs.append(gt_img) # Tx512x512x3 images [0-255]
 
 
-# LQ image simulation
-bits = 3
-N = 2**bits - 1
-for img_np in gt_imgs:
-    img_lq_sum = np.zeros_like(img_np, dtype=np.float32)
-    for i in range(N): # 4-bit (2**4 - 1)
-        img_lq_sum = img_lq_sum + generate_spc_from_gt(img_np)
-    img_lq = img_lq_sum / (1.0*N)
-    lq_imgs.append(img_lq)        
+    # LQ image simulation
+    bits = 3
+    N = 2**bits - 1
+    for img_np in gt_imgs:
+        img_lq_sum = np.zeros_like(img_np, dtype=np.float32)
+        for i in range(N): # 4-bit (2**4 - 1)
+            img_lq_sum = img_lq_sum + generate_spc_from_gt(img_np)
+        img_lq = img_lq_sum / (1.0*N)
+        lq_imgs.append(img_lq)        
 
-results = []
-pbar = tqdm(enumerate(zip(gt_imgs, lq_imgs)) , total=len(gt_imgs), desc="Processing images")
-for i, (gt_img, lq_img) in pbar:
-    pbar.set_description(f"Processing image {i+1}/{len(gt_imgs)}")
-    out = process(lq_img, "", upscale=1.0)
-    results.append((gt_img, lq_img, out[-1], out[0]))  # (GT image, LQ image, prompt, reconstructed image)
+    results = []
+    pbar = tqdm(enumerate(zip(gt_imgs, lq_imgs)) , total=len(gt_imgs), desc="Processing images")
+    for i, (gt_img, lq_img) in pbar:
+        pbar.set_description(f"Processing image {i+1}/{len(gt_imgs)}")
+        out = process(lq_img, "", upscale=1.0)
+        results.append((gt_img, lq_img, out[-1], out[0]))  # (GT image, LQ image, prompt, reconstructed image)
 
-# Save results
-output_dir = "./evaluation/"
-os.makedirs(output_dir, exist_ok=True)
-for i, (gt_img, lq_img, used_prompt, reconstructed) in enumerate(results):
-    gt_img_pil = Image.fromarray(gt_img.astype(np.uint8))
-    lq_img_pil = Image.fromarray((lq_img*255).astype(np.uint8))
-    reconstructed_pil = reconstructed
+    # Save results
+    output_dir = "./evaluation/"
+    os.makedirs(output_dir, exist_ok=True)
+    for i, (gt_img, lq_img, used_prompt, reconstructed) in enumerate(results):
+        gt_img_pil = Image.fromarray(gt_img.astype(np.uint8))
+        lq_img_pil = Image.fromarray((lq_img*255).astype(np.uint8))
+        reconstructed_pil = reconstructed
 
-    zero_filled_str = str(i+1).zfill(3)
-    gt_img_pil.save(os.path.join(output_dir, f"gt_{zero_filled_str}.png"))
-    lq_img_pil.save(os.path.join(output_dir, f"lq_{zero_filled_str}.png"))
-    reconstructed_pil.save(os.path.join(output_dir, f"reconstructed_{zero_filled_str}.png"))
+        zero_filled_str = str(i+1).zfill(3)
+        gt_img_pil.save(os.path.join(output_dir, f"{udm_video}_gt_{zero_filled_str}.png"))
+        lq_img_pil.save(os.path.join(output_dir, f"{udm_video}_lq_{zero_filled_str}.png"))
+        reconstructed_pil.save(os.path.join(output_dir, f"{udm_video}_out_{zero_filled_str}.png"))
 
-    if len(used_prompt) > 50:
-        with open(os.path.join(output_dir, f"prompt_{zero_filled_str}.txt"), "w") as f:
-            f.write(used_prompt)
+        if len(used_prompt) > 50:
+            with open(os.path.join(output_dir, f"prompt_{zero_filled_str}.txt"), "w") as f:
+                f.write(used_prompt)
