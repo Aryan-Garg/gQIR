@@ -1,4 +1,4 @@
-output_dir: /home/argar/apgi/gQVR/experiments
+output_dir: /home/argar/apgi/gQVR/experiments_video
 
 
 dataset:
@@ -7,7 +7,7 @@ dataset:
     dataloader_num_workers: 96
     target: gqvr.dataset.spc_video.SPCVideoDataset
     params:
-      file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/combined_dataset.txt
+      file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/combined_video_dataset.txt
       file_backend_cfg:
         target: gqvr.dataset.file_backend.HardDiskBackend
       out_size: 512
@@ -21,7 +21,7 @@ dataset:
     dataloader_num_workers: 96
     target: gqvr.dataset.spc_video.SPCVideoDataset
     params:
-      file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/random_val.txt
+      file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/random_video_val.txt
       file_backend_cfg:
         target: gqvr.dataset.file_backend.HardDiskBackend
       out_size: 512
@@ -30,8 +30,14 @@ dataset:
     batch_transform:
       target: gqvr.dataset.batch_transform.IdentityBatchTransform
 
-# qVAE config:    
+# qVAE * minivit config:    
 model:
+  minivit_cfg:
+    in_max_frames: 64
+    z_channels: 4
+    z_resolution: 64
+    # heads:  
+
   vae_cfg:
     embed_dim: 4
     ddconfig:
@@ -53,6 +59,7 @@ model:
 prompt_training: true
 base_model_type: sd2
 base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
+weight_path: /home/argar/apgi/gQVR/experiments/checkpoints_stage2_nullprompt/checkpoint-30000/state_dict.pth
 qvae_path: /home/argar/apgi/gQVR/experiments/3bit_vae_10xlr_8xBS/0600000.pt
 model_t: 200
 coeff_t: 200
@@ -62,11 +69,9 @@ use_ema: true
 ema_decay: 0.999
 resume_ema: true
 
-lambda_gan: 0.5
 lambda_lpips: 5
 lambda_l2: 1
-lr_G: 1e-5
-lr_D: 1e-5
+lr_minivit_stabilizer: 1e-5
 optimizer_type: adam
 opt_kwargs:
   betas: [0.9, 0.999]
@@ -74,7 +79,6 @@ opt_kwargs:
 mixed_precision: bf16
 seed: 310
 max_train_steps: 50000
-gradient_accumulation_steps: 4
 gradient_checkpointing: true
 max_grad_norm: 1.0
 logging_dir: logs
@@ -83,5 +87,3 @@ checkpointing_steps: 1000
 checkpoints_total_limit: None
 resume_from_checkpoint: ~
 log_image_steps: 500
-log_grad_steps: 250
-log_grad_modules: [conv_out]

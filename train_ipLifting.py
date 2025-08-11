@@ -47,13 +47,9 @@ class ipLiftingTrainer(BaseTrainer):
 
     def init_minivit_stabilizer(self):
         self.minivit_stabilizer = miniViT_3D(
-            in_channels=self.config.minivit.in_channels,
-            out_channels=self.config.minivit.out_channels,
-            num_layers=self.config.minivit.num_layers,
-            hidden_dim=self.config.minivit.hidden_dim,
-            num_heads=self.config.minivit.num_heads,
-            mlp_ratio=self.config.minivit.mlp_ratio,
-            norm_layer=self.config.minivit.norm_layer,
+            in_channels=self.config.model.minivit_cfg.in_max_frames,
+            z_channels=self.config.model.minivit_cfg.z_channels,
+            z_resolution=self.config.model.minivit_cfg.z_resolution
         ).to(self.device)
         self.minivit_stabilizer.train().requires_grad_(True)
 
@@ -106,14 +102,17 @@ class ipLiftingTrainer(BaseTrainer):
         z = torch.stack(zs, dim=1)
         return z
     
-    
-
-    def decode_all_latents(self, stable_zs: torch.Tensor) -> torch.Tensor:
+    def forward_minivit(self, z: torch.Tensor) -> torch.Tensor:
+        stable_zs = self.minivit_stabilizer(z)
+        xs = []
         for i in range(len(stable_zs.size(1))):
             z = stable_zs[:, i, ...]
             # Decode the latent z using the VAE
             x = self.vae.decode(z.to(self.weight_dtype) / 0.18215).float()
-        pass
+            xs.append(x)
+        x = torch.stack(xs, dim=1)
+        return x
+        
     
 
 parser = ArgumentParser()

@@ -211,7 +211,6 @@ class BaseTrainer:
     def init_flow_model(self):
         pass
 
-
     def init_internVL(self):
         torch_device = "cuda:7"
         path = 'OpenGVLab/InternVL3-8B'
@@ -225,7 +224,6 @@ class BaseTrainer:
             # device_map=device_map,
             token="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").eval().requires_grad_(False).to(torch_device)
         self.internVL3_tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True, use_fast=False)
-
 
     @overload
     def init_scheduler(self):
@@ -520,8 +518,9 @@ class BaseTrainer:
         ...
 
     @overload
-    def decode_all_latents(self, zs: torch.Tensor) -> torch.Tensor:
+    def forward_minivit(self, z: torch.Tensor) -> torch.Tensor:
         ...
+
     
     def optimize_generator(self):
         with self.accelerator.accumulate(self.G):
@@ -594,8 +593,9 @@ class BaseTrainer:
             # ??? No need since ConvNext is no longer on VRAM
             # # Remove the UNet & Encoder of the VAE from the VRAM 
             # self.unload_vram()
-            stable_zs = self.minivit_stabilizer(z)
-            self.minivit_pred = self.decode_all_latents(stable_zs)
+            self.minivit_pred = self.forward_minivit(z)
+            # NOTE: collect_all_latents() and forward_minivit() are separately defined to perform the unloading of models
+            # since video training requires much more VRAM
             
             loss_l2 = F.mse_loss(self.minivit_pred, self.batch_inputs.gt, reduction="mean") * self.config.lambda_l2
             loss_lpips = self.net_lpips(self.minivit_pred, self.batch_inputs.gt).mean() * self.config.lambda_lpips
