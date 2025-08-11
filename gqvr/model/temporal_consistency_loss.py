@@ -139,6 +139,9 @@ def calculate_motion_ac_score(video_path, amp, model):
     return amp_recognition_score
 
 # Adapted from https://github.com/phoenix104104/fast_blind_video_consistency
+# NOTE: This function computes the warping error between consecutive frames in a video
+# TODO 1: Adapt this function to become a loss function
+# TODO 2: The loss should be computed between the warped (to previous) predicted frame and the original frame from gt and summed across all frames
 def compute_video_warping_error(video_path, model):
 
     cap = cv2.VideoCapture(video_path)
