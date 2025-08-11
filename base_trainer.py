@@ -185,15 +185,33 @@ class BaseTrainer:
         return model
 
     def init_models(self):
-        self.init_scheduler()
-        self.init_text_models()
-        self.init_vae()
-        self.init_generator()
-        self.init_discriminator()
-        self.init_lpips()
+        if self.config.lifting_training:
+            self.init_scheduler()
+            self.init_text_models()
+            self.init_vae()
+            self.init_generator()
+            self.init_lpips()
+            self.init_minivit_stabilizer()
+            self.init_flow_model()
+        else:
+            self.init_scheduler()
+            self.init_text_models()
+            self.init_vae()
+            self.init_generator()
+            self.init_discriminator()
+            self.init_lpips()
+
         if self.config.prompt_training:
             self.init_internVL() 
         
+    @overload
+    def init_minivit_stabilizer(self):
+        ...
+
+    def init_flow_model(self):
+        pass
+
+
     def init_internVL(self):
         torch_device = "cuda:7"
         path = 'OpenGVLab/InternVL3-8B'
@@ -207,6 +225,7 @@ class BaseTrainer:
             # device_map=device_map,
             token="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").eval().requires_grad_(False).to(torch_device)
         self.internVL3_tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True, use_fast=False)
+
 
     @overload
     def init_scheduler(self):
@@ -290,19 +309,27 @@ class BaseTrainer:
         else:
             optimizer_cls = None
 
-        self.G_params = list(filter(lambda p: p.requires_grad, self.G.parameters()))
-        self.G_opt = optimizer_cls(
-            self.G_params,
-            lr=self.config.lr_G,
-            **self.config.opt_kwargs,
-        )
+        if self.config.lifting_training:
+            self.minivit_stabilizer_params = list(filter(lambda p: p.requires_grad, self.minivit_stabilizer_params.parameters()))
+            self.minivit_stabilizer_opt = optimizer_cls(
+                self.minivit_stabilizer_params,
+                lr=self.config.lr_minivit_stabilizer,
+                **self.config.opt_kwargs,
+            )
+        else:
+            self.G_params = list(filter(lambda p: p.requires_grad, self.G.parameters()))
+            self.G_opt = optimizer_cls(
+                self.G_params,
+                lr=self.config.lr_G,
+                **self.config.opt_kwargs,
+            )
 
-        self.D_params = list(filter(lambda p: p.requires_grad, self.D.parameters()))
-        self.D_opt = optimizer_cls(
-            self.D_params,
-            lr=self.config.lr_D,
-            **self.config.opt_kwargs,
-        )
+            self.D_params = list(filter(lambda p: p.requires_grad, self.D.parameters()))
+            self.D_opt = optimizer_cls(
+                self.D_params,
+                lr=self.config.lr_D,
+                **self.config.opt_kwargs,
+            )
 
     def init_dataset(self):
         data_cfg = self.config.dataset
@@ -316,11 +343,18 @@ class BaseTrainer:
         self.batch_transform = instantiate_from_config(data_cfg.train.batch_transform)
 
     def prepare_all(self):
-        logger.info("Wrapping models, optimizers and dataloaders")
-        attrs = ["G", "D", "G_opt", "D_opt", "dataloader"]
-        prepared_objs = self.accelerator.prepare(*[getattr(self, attr) for attr in attrs])
-        for attr, obj in zip(attrs, prepared_objs):
-            setattr(self, attr, obj)
+        if self.config.lifting_training:
+            logger.info("[+] Preparing models, optimizers and dataloaders for image prior lifting")
+            attrs = ["minivit_stabilizer", "minivit_stabilizer_opt", "dataloader"]
+            prepared_objs = self.accelerator.prepare(*[getattr(self, attr) for attr in attrs])
+            for attr, obj in zip(attrs, prepared_objs):
+                setattr(self, attr, obj)
+        else:
+            logger.info("Wrapping models, optimizers and dataloaders")
+            attrs = ["G", "D", "G_opt", "D_opt", "dataloader"]
+            prepared_objs = self.accelerator.prepare(*[getattr(self, attr) for attr in attrs])
+            for attr, obj in zip(attrs, prepared_objs):
+                setattr(self, attr, obj)
         print_vram_state("After accelerator.prepare", logger=logger)
 
     def force_optimizer_ckpt_safe(self, checkpoint_dir):
@@ -342,39 +376,72 @@ class BaseTrainer:
         ...
 
     def on_training_start(self):
-        # Build ema state dict
-        logger.info(f"Creating EMA handler, Use EMA = {self.config.use_ema}, EMA decay = {self.config.ema_decay}")
-        if self.config.resume_from_checkpoint is not None and self.config.resume_ema:
-            ema_resume_pth = os.path.join(self.config.resume_from_checkpoint, "ema_state_dict.pth")
+        if self.config.lifting_training:
+            # Build ema state dict
+            logger.info(f"Creating EMA handler, Use EMA = {self.config.use_ema}, EMA decay = {self.config.ema_decay}")
+            if self.config.resume_from_checkpoint is not None and self.config.resume_ema:
+                ema_resume_pth = os.path.join(self.config.resume_from_checkpoint, "ema_state_dict.pth")
+            else:
+                ema_resume_pth = None
+            self.ema_handler = EMAModel(
+                self.unwrap_model(self.minivit_stabilizer),
+                decay=self.config.ema_decay,
+                use_ema=self.config.use_ema,
+                ema_resume_pth=ema_resume_pth,
+                verbose=self.accelerator.is_local_main_process,
+            )
+            global_step = 0
+            if self.config.resume_from_checkpoint:
+                path = self.config.resume_from_checkpoint
+                ckpt_name = os.path.basename(path)
+                logger.info(f"Resuming from checkpoint {path}")
+                self.force_optimizer_ckpt_safe(path)
+                self.accelerator.load_state(path)
+                global_step = int(ckpt_name.split("-")[1])
+                init_global_step = global_step
+            else:
+                init_global_step = 0
+            self.global_step = global_step
+            self.pbar = tqdm(
+                range(0, self.config.max_train_steps),
+                initial=init_global_step,
+                desc="Steps",
+                disable=not self.accelerator.is_main_process,
+            )
         else:
-            ema_resume_pth = None
-        self.ema_handler = EMAModel(
-            self.unwrap_model(self.G),
-            decay=self.config.ema_decay,
-            use_ema=self.config.use_ema,
-            ema_resume_pth=ema_resume_pth,
-            verbose=self.accelerator.is_local_main_process,
-        )
+            # Build ema state dict
+            logger.info(f"Creating EMA handler, Use EMA = {self.config.use_ema}, EMA decay = {self.config.ema_decay}")
+            if self.config.resume_from_checkpoint is not None and self.config.resume_ema:
+                ema_resume_pth = os.path.join(self.config.resume_from_checkpoint, "ema_state_dict.pth")
+            else:
+                ema_resume_pth = None
+            self.ema_handler = EMAModel(
+                self.unwrap_model(self.G),
+                decay=self.config.ema_decay,
+                use_ema=self.config.use_ema,
+                ema_resume_pth=ema_resume_pth,
+                verbose=self.accelerator.is_local_main_process,
+            )
 
-        global_step = 0
-        if self.config.resume_from_checkpoint:
-            path = self.config.resume_from_checkpoint
-            ckpt_name = os.path.basename(path)
-            logger.info(f"Resuming from checkpoint {path}")
-            self.force_optimizer_ckpt_safe(path)
-            self.accelerator.load_state(path)
-            global_step = int(ckpt_name.split("-")[1])
-            init_global_step = global_step
-        else:
-            init_global_step = 0
+            global_step = 0
+            if self.config.resume_from_checkpoint:
+                path = self.config.resume_from_checkpoint
+                ckpt_name = os.path.basename(path)
+                logger.info(f"Resuming from checkpoint {path}")
+                self.force_optimizer_ckpt_safe(path)
+                self.accelerator.load_state(path)
+                global_step = int(ckpt_name.split("-")[1])
+                init_global_step = global_step
+            else:
+                init_global_step = 0
 
-        self.global_step = global_step
-        self.pbar = tqdm(
-            range(0, self.config.max_train_steps),
-            initial=init_global_step,
-            desc="Steps",
-            disable=not self.accelerator.is_main_process,
-        )
+            self.global_step = global_step
+            self.pbar = tqdm(
+                range(0, self.config.max_train_steps),
+                initial=init_global_step,
+                desc="Steps",
+                disable=not self.accelerator.is_main_process,
+            )
 
     def get_internVL_prompt(self, gt_path):
         bs = len(gt_path)
@@ -389,36 +456,73 @@ class BaseTrainer:
         return lst_prompts
 
     def prepare_batch_inputs(self, batch):
-        batch = self.batch_transform(batch)
-        gt, lq, prompt, gt_path = batch
-        # print(f"[+] gt_path: {gt_path}\n")
-        gt = gt.permute(0, 3, 1, 2) # N C H W
-        lq = lq.permute(0, 3, 1, 2)
+        if self.config.lifting_training:
+            batch = self.batch_transform(batch)
+            gt_vid, lq_vid, prompt, gt_path = batch
 
-        if self.config.prompt_training:
-            prompt = self.get_internVL_prompt(gt_path)
-            # print(f"[+] InternVL3 Prompt: {prompt}")
+            gt_vid = gt_vid.permute(0, 1, 4, 2, 3) # N T C H W
+            lq_vid = lq_vid.permute(0, 1, 4, 2, 3)
+            if self.config.prompt_training:
+                prompt = self.get_internVL_prompt(gt_path)
+                # print(f"[+] InternVL3 Prompt: {prompt}")
+            bs = len(prompt)
+            c_txt = self.encode_prompt(prompt)
 
-        bs = len(prompt)
-        c_txt = self.encode_prompt(prompt)
-        # NOTE:
-        # .sample() => Adding some noise to the encoded latent --- for perception vs fidelity control
-        # .mode() => For maximum fidelity 
-        z_lq = self.vae.encode(lq.to(self.weight_dtype)).mode() 
-        timesteps = torch.full((bs,), self.config.model_t, dtype=torch.long, device=self.device)
-        self.batch_inputs = BatchInput(
-            gt=gt, 
-            lq=lq,
-            z_lq=z_lq,
-            c_txt=c_txt,
-            timesteps=timesteps,
-            prompt=prompt,
-        )
+            z_lqs = []
+            for i in range(lq_vid.size(1)):
+                this_lq = lq_vid[:, i, :, :, :].to(self.weight_dtype) # N C H W
+                this_z_lq = self.vae.encode(this_lq).mode()
+                z_lqs.append(this_z_lq)
+            z_lq = torch.stack(z_lqs, dim=1) # N T C H W
+
+            timesteps = torch.full((bs,), self.config.model_t, dtype=torch.long, device=self.device)
+            self.batch_inputs = BatchInput(
+                gt=gt_vid, 
+                lq=lq_vid,
+                z_lq=z_lq,
+                c_txt=c_txt,
+                timesteps=timesteps,
+                prompt=prompt,
+            )
+        else:
+            batch = self.batch_transform(batch)
+            gt, lq, prompt, gt_path = batch
+            # print(f"[+] gt_path: {gt_path}\n")
+            gt = gt.permute(0, 3, 1, 2) # N C H W
+            lq = lq.permute(0, 3, 1, 2)
+
+            if self.config.prompt_training:
+                prompt = self.get_internVL_prompt(gt_path)
+                # print(f"[+] InternVL3 Prompt: {prompt}")
+
+            bs = len(prompt)
+            c_txt = self.encode_prompt(prompt)
+            # NOTE:
+            # .sample() => Adding some noise to the encoded latent --- for perception vs fidelity control
+            # .mode() => For maximum fidelity 
+            z_lq = self.vae.encode(lq.to(self.weight_dtype)).mode() 
+            timesteps = torch.full((bs,), self.config.model_t, dtype=torch.long, device=self.device)
+            self.batch_inputs = BatchInput(
+                gt=gt, 
+                lq=lq,
+                z_lq=z_lq,
+                c_txt=c_txt,
+                timesteps=timesteps,
+                prompt=prompt,
+            )
 
     @overload
     def forward_generator(self) -> torch.Tensor:
         ...
 
+    @overload
+    def collect_all_latents(self) -> torch.Tensor:
+        ...
+
+    @overload
+    def decode_all_latents(self, zs: torch.Tensor) -> torch.Tensor:
+        ...
+    
     def optimize_generator(self):
         with self.accelerator.accumulate(self.G):
             self.unwrap_model(self.D).eval().requires_grad_(False)
@@ -465,6 +569,50 @@ class BaseTrainer:
         loss_dict.update(dict(D_logits_real=real_logits, D_logits_fake=fake_logits))
         return loss_dict
 
+    def unload_vram(self):
+        if hasattr(self, "vae"):
+            self.vae.encoder.to("cpu")
+            torch.cuda.empty_cache()
+            logger.info("vae.encoder unloaded from VRAM")
+        if hasattr(self, "G"):
+            self.G.to("cpu")
+            torch.cuda.empty_cache()
+            logger.info("Generator unloaded from VRAM")
+
+    def reload_vram(self):
+        if hasattr(self, "vae"):
+            self.vae.encoder.to(self.device)
+            logger.info("vae.encoder reloaded to VRAM")
+        if hasattr(self, "G"):
+            self.G.to(self.device)
+            logger.info("Generator reloaded to VRAM")
+
+    def optimize_minivit_stabilizer(self):
+        with self.accelerator.accumulate(self.minivit_stabilizer):
+            z = self.collect_all_latents()
+            z = z.to(self.weight_dtype)
+            # ??? No need since ConvNext is no longer on VRAM
+            # # Remove the UNet & Encoder of the VAE from the VRAM 
+            # self.unload_vram()
+            stable_zs = self.minivit_stabilizer(z)
+            self.minivit_pred = self.decode_all_latents(stable_zs)
+            
+            loss_l2 = F.mse_loss(self.minivit_pred, self.batch_inputs.gt, reduction="mean") * self.config.lambda_l2
+            loss_lpips = self.net_lpips(self.minivit_pred, self.batch_inputs.gt).mean() * self.config.lambda_lpips
+            loss_flow = 0. & self.config.lambda_flow
+            loss_minivit_stabilizer = loss_l2 + loss_lpips + loss_flow
+
+            self.accelerator.backward(loss_minivit_stabilizer)
+            if self.accelerator.sync_gradients:
+                self.accelerator.clip_grad_norm_(self.minivit_stabilizer_params, self.config.max_grad_norm)
+            self.minivit_stabilizer_opt.step()
+            self.minivit_stabilizer_opt.zero_grad()
+            self.accelerator.wait_for_everyone()
+
+        # Log something
+        loss_dict = dict(minivit_total=loss_minivit_stabilizer, minivit_mse=loss_l2, minivit_lpips=loss_lpips, minivit_flow=loss_flow)
+        return loss_dict
+
     def run(self):
         self.attach_accelerator_hooks()
         self.on_training_start()
@@ -474,45 +622,126 @@ class BaseTrainer:
             for batch in self.dataloader:
                 self.prepare_batch_inputs(batch)
                 bs = len(self.batch_inputs.lq)
-                generator_step = ((self.batch_count // self.config.gradient_accumulation_steps) % 2) == 0
-                if generator_step:
-                    loss_dict = self.optimize_generator()
-                else:
-                    loss_dict = self.optimize_discriminator()
-                
-                for k, v in loss_dict.items():
-                    avg_loss = self.accelerator.gather(v.repeat(bs)).mean()
-                    if k not in train_loss:
-                        train_loss[k] = 0
-                    train_loss[k] += avg_loss.item() / self.config.gradient_accumulation_steps
+                if self.config.lifting_training:
+                    loss_dict = self.optimize_minivit_stabilizer()
 
-                self.batch_count += 1
-                if self.accelerator.sync_gradients:
-                    if generator_step:
+                    for k, v in loss_dict.items():
+                        avg_loss = self.accelerator.gather(v.repeat(bs)).mean()
+                        if k not in train_loss:
+                            train_loss[k] = 0
+                        train_loss[k] += avg_loss.item() / self.config.gradient_accumulation_steps
+                    
+                    self.batch_count += 1
+                    if self.accelerator.sync_gradients:
                         # update EMA
                         self.ema_handler.update()
-                    state = "Generator     Step" if not generator_step else "Discriminator Step"
-                    _, _, peak = print_vram_state(None)
-                    self.pbar.set_description(f"{state}, VRAM peak: {peak:.2f} GB")
+                        _, _, peak = print_vram_state(None)
+                        self.pbar.set_description(f"{state}, VRAM peak: {peak:.2f} GB")
+                    
+                        self.global_step += 1
+                        self.pbar.update(1)
+                        log_dict = {}
+                        for k in train_loss.keys():
+                            log_dict[f"loss/{k}"] = train_loss[k]
+                        train_loss = {}
+                        self.accelerator.log(log_dict, step=self.global_step)
+                        if self.global_step % self.config.log_image_steps == 0 or self.global_step == 1:
+                            self.log_videos()
+                        if self.global_step % self.config.checkpointing_steps == 0 or self.global_step == 1:
+                            self.save_checkpoint()
 
-                if self.accelerator.sync_gradients and not generator_step:
-                    self.global_step += 1
-                    self.pbar.update(1)
-                    log_dict = {}
-                    for k in train_loss.keys():
-                        log_dict[f"loss/{k}"] = train_loss[k]
-                    train_loss = {}
-                    self.accelerator.log(log_dict, step=self.global_step)
-                    if self.global_step % self.config.log_image_steps == 0 or self.global_step == 1:
-                        self.log_images()
-                    if self.global_step % self.config.log_grad_steps == 0 or self.global_step == 1:
-                        self.log_grads()
-                    if self.global_step % self.config.checkpointing_steps == 0 or self.global_step == 1:
-                        self.save_checkpoint()
+                    if self.global_step >= self.config.max_train_steps:
+                        break
+                    
+                    # ??? No need since ConvNext is no longer on VRAM
+                    # # Reload VAE & UNet to VRAM
+                    # self.reload_vram()
 
-                if self.global_step >= self.config.max_train_steps:
-                    break
+                else:
+                    generator_step = ((self.batch_count // self.config.gradient_accumulation_steps) % 2) == 0
+                    if generator_step:
+                        loss_dict = self.optimize_generator()
+                    else:
+                        loss_dict = self.optimize_discriminator()
+
+                    for k, v in loss_dict.items():
+                        avg_loss = self.accelerator.gather(v.repeat(bs)).mean()
+                        if k not in train_loss:
+                            train_loss[k] = 0
+                        train_loss[k] += avg_loss.item() / self.config.gradient_accumulation_steps
+
+                    self.batch_count += 1
+                    if self.accelerator.sync_gradients:
+                        if generator_step:
+                            # update EMA
+                            self.ema_handler.update()
+                        state = "Generator     Step" if not generator_step else "Discriminator Step"
+                        _, _, peak = print_vram_state(None)
+                        self.pbar.set_description(f"{state}, VRAM peak: {peak:.2f} GB")
+
+                    if self.accelerator.sync_gradients and not generator_step:
+                        self.global_step += 1
+                        self.pbar.update(1)
+                        log_dict = {}
+                        for k in train_loss.keys():
+                            log_dict[f"loss/{k}"] = train_loss[k]
+                        train_loss = {}
+                        self.accelerator.log(log_dict, step=self.global_step)
+                        if self.global_step % self.config.log_image_steps == 0 or self.global_step == 1:
+                            self.log_images()
+                        if self.global_step % self.config.log_grad_steps == 0 or self.global_step == 1:
+                            self.log_grads()
+                        if self.global_step % self.config.checkpointing_steps == 0 or self.global_step == 1:
+                            self.save_checkpoint()
+
+                    if self.global_step >= self.config.max_train_steps:
+                        break
         self.accelerator.end_training()
+
+    def log_videos(self):
+        N = 1
+        video_logs = dict(
+            lq=(self.batch_inputs.lq[:N] + 1) / 2,
+            gt=(self.batch_inputs.gt[:N] + 1) / 2,
+            out=(self.minivit_pred[:N] + 1) / 2,
+            prompt=(log_txt_as_img((256, 256), self.batch_inputs.prompt[:N]) + 1) / 2,
+        )
+        if self.config.use_ema:
+            # recompute for EMA results
+            self.ema_handler.activate_ema_weights()
+            with torch.no_grad():
+                ema_x = self.collect_all_latents()
+                ema_x = self.minivit_stabilizer(ema_x)
+                ema_x = self.decode_all_latents(ema_x)
+                video_logs["G_ema"] = (ema_x[:N] + 1) / 2
+            self.ema_handler.deactivate_ema_weights()
+
+        if not self.accelerator.is_main_process:
+            return
+
+        for tracker in self.accelerator.trackers:
+            if tracker.name == "tensorboard":
+                for tag, images in video_logs.items():
+                    # Convert images (1, T, C, H, W) to (1 * T, C, H, W)
+                    images = images.squeeze(0)
+                    images = images.float()
+                    # Add video to tensorboard
+                    tracker.writer.add_video(
+                        f"video/{tag}",
+                        images,
+                        self.global_step,
+                        fps=24,  # Adjust FPS
+                    )
+
+        for key, images in video_logs.items():
+            image_arrs = (images * 255.0).clamp(0, 255).to(torch.uint8) \
+                .squeeze(0).permute(0, 2, 3, 1).contiguous().cpu().numpy()
+            save_dir = os.path.join(
+                self.config.output_dir, self.config.logging_dir, "log_videos", f"{self.global_step:07}", key)
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir)
+            for i, img in enumerate(image_arrs):
+                Image.fromarray(img).save(os.path.join(save_dir, f"sample{i}.png"))
 
     def log_images(self):
         N = 4
@@ -580,19 +809,6 @@ class BaseTrainer:
 
     def save_checkpoint(self):
         if self.accelerator.is_main_process:
-            # print("self.config.checkpoints_total_limit:",self.config.checkpoints_total_limit)
-            # if self.config.checkpoints_total_limit is not None:
-            #     checkpoints = os.listdir(self.config.output_dir)
-            #     checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
-            #     checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
-            #     if len(checkpoints) >= self.config.checkpoints_total_limit:
-            #         num_to_remove = len(checkpoints) - self.config.checkpoints_total_limit + 1
-            #         removing_checkpoints = checkpoints[0:num_to_remove]
-            #         logger.info(f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints")
-            #         logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
-            #         for removing_checkpoint in removing_checkpoints:
-            #             removing_checkpoint = os.path.join(self.config.output_dir, removing_checkpoint)
-            #             shutil.rmtree(removing_checkpoint)
             save_path = os.path.join(self.config.output_dir, "checkpoints", f"checkpoint-{self.global_step}")
             self.accelerator.save_state(save_path)
             logger.info(f"Saved state to {save_path}")
