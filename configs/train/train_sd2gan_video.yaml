@@ -56,7 +56,8 @@ model:
       attn_resolutions: []
       dropout: 0.0
 
-prompt_training: true
+prompt_training: false
+lifting_training: true
 base_model_type: sd2
 base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
 weight_path: /home/argar/apgi/gQVR/experiments/checkpoints_stage2_nullprompt/checkpoint-30000/state_dict.pth
