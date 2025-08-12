@@ -8,7 +8,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 from argparse import ArgumentParser
 from omegaconf import OmegaConf
 
-from gqvr.model.minivit import miniViT_3D
+from gqvr.model.temporal_stabilizer import TemporalConsistencyLayer
 from base_trainer import BaseTrainer
 
 
@@ -45,13 +45,9 @@ class ipLiftingTrainer(BaseTrainer):
 
         self.G.eval().requires_grad_(False)
 
-    def init_minivit_stabilizer(self):
-        self.minivit_stabilizer = miniViT_3D(
-            in_channels=self.config.model.minivit_cfg.in_max_frames,
-            z_channels=self.config.model.minivit_cfg.z_channels,
-            z_resolution=self.config.model.minivit_cfg.z_resolution
-        ).to(self.device)
-        self.minivit_stabilizer.train().requires_grad_(True)
+    def init_temporal_stabilizer(self):
+        self.temp_stabilizer = TemporalConsistencyLayer().to(self.device)
+        self.temp_stabilizer.train().requires_grad_(True)
 
     def encode_prompt(self, prompt: List[str]) -> Dict[str, torch.Tensor]:
         txt_ids = self.tokenizer(
@@ -70,7 +66,7 @@ class ipLiftingTrainer(BaseTrainer):
                 model = models[0]
                 weights.pop(0)
                 model = self.unwrap_model(model)
-                assert isinstance(model, miniViT_3D)
+                assert isinstance(model, TemporalConsistencyLayer)
                 state_dict = {}
                 for name, param in model.named_parameters():
                     if param.requires_grad:
@@ -79,10 +75,10 @@ class ipLiftingTrainer(BaseTrainer):
 
         def load_model_hook(models, input_dir):
             model = models.pop(0)
-            assert isinstance(model, miniViT_3D), "Model must be an instance of miniViT_3D"
+            assert isinstance(model, TemporalConsistencyLayer), "Model must be an instance of TemporalConsistencyLayer"
             state_dict = torch.load(os.path.join(input_dir, "state_dict.pth"))
             m, u = model.load_state_dict(state_dict, strict=False)
-            logger.info(f"Loading miniViT_3D parameters, unexpected keys: {u}")
+            logger.info(f"Loading temp_3D parameters, unexpected keys: {u}")
 
         self.accelerator.register_save_state_pre_hook(save_model_hook)
         self.accelerator.register_load_state_pre_hook(load_model_hook)
@@ -102,8 +98,8 @@ class ipLiftingTrainer(BaseTrainer):
         z = torch.stack(zs, dim=1)
         return z
     
-    def forward_minivit(self, z: torch.Tensor) -> torch.Tensor:
-        stable_zs = self.minivit_stabilizer(z)
+    def forward_temp(self, z: torch.Tensor) -> torch.Tensor:
+        stable_zs = self.temp_stabilizer(z)
         xs = []
         for i in range(len(stable_zs.size(1))):
             z = stable_zs[:, i, ...]

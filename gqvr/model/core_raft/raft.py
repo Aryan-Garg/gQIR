@@ -26,7 +26,7 @@ class RAFT(nn.Module):
     def __init__(self, args):
         super(RAFT, self).__init__()
         self.args = args
-
+        
         if args.small:
             self.hidden_dim = hdim = 96
             self.context_dim = cdim = 64

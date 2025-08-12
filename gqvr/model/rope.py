@@ -1,6 +1,4 @@
 import torch
-import torch.nn as nn
-from typing import List, Dict
 
 
 class RoPENd(torch.nn.Module):
@@ -31,17 +29,3 @@ class RoPENd(torch.nn.Module):
         x = torch.view_as_complex(x.reshape(*x.shape[:-1], -1, 2))
         pe_x = self.rotations * x
         return torch.view_as_real(pe_x).flatten(-2)
-    
-
-class miniViT_3D(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int):
-        super(miniViT_3D, self).__init__()
-        # rope = RoPENd((in_channels, 64, 64, 64))  # Example shape
-
-    def forward(self, x: torch.Tensor, bit_depth_tensor: torch.Tensor) -> torch.Tensor:
-        # NOTE: bit_depth_tensor specifies the bit depth of each frame in the input tensor x - 
-        # This value should be concat with the rotary positional embedding
-
-        # x is a 4D tensor with shape (batch_size, video_frame, channels, height, width)
-        
-        return x  # Placeholder

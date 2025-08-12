@@ -141,7 +141,8 @@ def calculate_motion_ac_score(video_path, amp, model):
 # Adapted from https://github.com/phoenix104104/fast_blind_video_consistency
 # NOTE: This function computes the warping error between consecutive frames in a video
 # TODO 1: Adapt this function to become a loss function
-# TODO 2: The loss should be computed between the warped (to previous) predicted frame and the original frame from gt and summed across all frames
+# TODO 2: The loss should be computed between the warped (to previous) predicted frame and the original frame from gt and summed across all frames.
+# TODO: L_flow = Mean( || backwards_warp(predicted_curr_frame) - prev_gt_frame || + ||predicted_curr_frame - forward_warp(prev_gt_frame) ||)
 def compute_video_warping_error(video_path, model):
 
     cap = cv2.VideoCapture(video_path)
@@ -230,7 +231,7 @@ def read_text_file(file_path):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir_videos", type=str, default='', help="Specify the path of generated videos")
-    parser.add_argument("--metric", type=str, default='celebrity_id_score', help="Specify the metric to be used")
+    parser.add_argument("--metric", type=str, default='warping_error', help="Specify the metric to be used")
     parser.add_argument('--model', type=str, default='../../checkpoints/RAFT/models/raft-things.pth',help="restore checkpoint")
     parser.add_argument('--path', help="dataset for evaluation")
     parser.add_argument('--small', action='store_true', help='use small model')

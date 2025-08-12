@@ -32,6 +32,10 @@ from gqvr.utils.common import instantiate_from_config, log_txt_as_img, print_vra
 from gqvr.utils.ema import EMAModel
 from gqvr.utils.tabulate import tabulate
 
+from gqvr.model.core_raft.raft import RAFT
+from gqvr.model.core_raft.utils import flow_viz
+from gqvr.model.core_raft.utils.utils import InputPadder
+
 
 logger = get_logger(__name__, log_level="INFO")
 logging.basicConfig(
@@ -68,7 +72,6 @@ def build_transform(input_size):
         T.Normalize(mean=MEAN, std=STD)
     ])
     return transform
-
 
 
 def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_size):
@@ -134,7 +137,101 @@ def load_image(image_file, input_size=448, max_num=12):
     pixel_values = torch.stack(pixel_values)
     return pixel_values
 
+################################# FLOW STUFF #############################################
+
+
+def differentiable_warp(x, flow):
+    """
+    Warp image or feature x according to flow.
+    x: [B, C, H, W]
+    flow: [B, 2, H, W] (flow in pixels, with flow[:,0] = dx, flow[:,1] = dy)
+    """
+    B, C, H, W = x.size()
+    # Create mesh grid normalized to [-1,1]
+    grid_y, grid_x = torch.meshgrid(torch.arange(H), torch.arange(W))
+    grid = torch.stack((grid_x, grid_y), 2).float().to(x.device)  # [H, W, 2]
+
+    grid = grid.unsqueeze(0).repeat(B, 1, 1, 1)  # [B, H, W, 2]
+
+    # Add flow, normalize grid to [-1,1]
+    flow = flow.permute(0, 2, 3, 1)
+    new_grid = grid + flow
+    new_grid[..., 0] = 2.0 * new_grid[..., 0] / (W - 1) - 1.0
+    new_grid[..., 1] = 2.0 * new_grid[..., 1] / (H - 1) - 1.0
+
+    warped = F.grid_sample(x, new_grid, align_corners=True)
+    return warped
+
+
+def compute_flow_magnitude(flow):
+    return torch.norm(flow, dim=1, keepdim=True)  # [B, 1, H, W]
+
+def compute_flow_gradients(flow):
+    # flow: [B, 2, H, W]
+    fx = flow[:, 0:1, :, :]  # horizontal flow
+    fy = flow[:, 1:2, :, :]  # vertical flow
+
+    # finite difference gradients (simple Sobel or central differences)
+    fx_du = fx[:, :, :, 2:] - fx[:, :, :, :-2]  # d/dx
+    fx_dv = fx[:, :, 2:, :] - fx[:, :, :-2, :]  # d/dy
+
+    fy_du = fy[:, :, :, 2:] - fy[:, :, :, :-2]
+    fy_dv = fy[:, :, 2:, :] - fy[:, :, :-2, :]
+
+    # pad to original size (pad 1 pixel on each side)
+    fx_du = F.pad(fx_du, (1, 1, 0, 0))
+    fx_dv = F.pad(fx_dv, (0, 0, 1, 1))
+    fy_du = F.pad(fy_du, (1, 1, 0, 0))
+    fy_dv = F.pad(fy_dv, (0, 0, 1, 1))
+
+    return fx_du, fx_dv, fy_du, fy_dv
+
+
+def detect_occlusion(fw_flow, bw_flow, img):
+    """
+    fw_flow: forward flow from img1 to img2, [B, 2, H, W]
+    bw_flow: backward flow from img2 to img1, [B, 2, H, W]
+    img: image tensor (for warping), [B, C, H, W]
+
+    Returns:
+        occlusion mask [B, 1, H, W], float tensor (0 or 1 mask)
+        warped_img2: img warped back to img1 space by bw_flow
+    """
+
+    # Warp forward flow to img2 frame using backward flow
+    fw_flow_warped = differentiable_warp(fw_flow, bw_flow)  # [B, 2, H, W]
+
+    # Warp img to img1 space using backward flow
+    warp_img = differentiable_warp(img, bw_flow)
+
+    # Forward-backward flow consistency check
+    fb_flow_sum = fw_flow_warped + bw_flow  # should be near zero if consistent
+
+    fb_flow_mag = compute_flow_magnitude(fb_flow_sum)  # [B,1,H,W]
+    fw_flow_w_mag = compute_flow_magnitude(fw_flow_warped)
+    bw_flow_mag = compute_flow_magnitude(bw_flow)
+
+    threshold = 0.01 * (fw_flow_w_mag + bw_flow_mag) + 0.5
+
+    mask1 = fb_flow_mag > threshold  # bool mask [B,1,H,W]
+
+    # Compute flow gradients for motion boundary detection
+    fx_du, fx_dv, fy_du, fy_dv = compute_flow_gradients(bw_flow)
+    fx_mag = fx_du ** 2 + fx_dv ** 2
+    fy_mag = fy_du ** 2 + fy_dv ** 2
+
+    mask2 = (fx_mag + fy_mag) > 0.01 * bw_flow_mag + 0.002
+
+    # Combine masks
+    mask = mask1 | mask2  # logical or
+
+    occlusion = mask.float()  # convert to float mask (0 or 1)
+
+    return occlusion, warp_img
+
+
 ##########################################################################################
+
 
 class BaseTrainer:
 
@@ -191,7 +288,7 @@ class BaseTrainer:
             self.init_vae()
             self.init_generator()
             self.init_lpips()
-            self.init_minivit_stabilizer()
+            self.init_temp_stabilizer()
             self.init_flow_model()
         else:
             self.init_scheduler()
@@ -205,12 +302,23 @@ class BaseTrainer:
             self.init_internVL() 
         
     @overload
-    def init_minivit_stabilizer(self):
+    def init_temp_stabilizer(self):
         ...
 
     def init_flow_model(self):
-        pass
+        class RAFT_args:
+            self.mixed_precision = False
+            self.small = False
+            self.alternate_corr = False
+            self.dropout = False
+        raft_args = RAFT_args()
 
+        self.raft_model = RAFT(raft_args)
+        self.raft_model.load_state_dict(torch.load("/home/argar/apgi/gQVR/pretrained_checkpoints/raft_models_weights/raft-things.pth"))
+
+        self.raft_model = self.raft_model.module
+        self.raft_model.eval().requires_grad_(False).to(self.device)
+        
     def init_internVL(self):
         torch_device = "cuda:7"
         path = 'OpenGVLab/InternVL3-8B'
@@ -308,10 +416,10 @@ class BaseTrainer:
             optimizer_cls = None
 
         if self.config.lifting_training:
-            self.minivit_stabilizer_params = list(filter(lambda p: p.requires_grad, self.minivit_stabilizer_params.parameters()))
-            self.minivit_stabilizer_opt = optimizer_cls(
-                self.minivit_stabilizer_params,
-                lr=self.config.lr_minivit_stabilizer,
+            self.temp_stabilizer_params = list(filter(lambda p: p.requires_grad, self.temp_stabilizer.parameters()))
+            self.temp_stabilizer_opt = optimizer_cls(
+                self.temp_stabilizer_params,
+                lr=self.config.lr_temp_stabilizer,
                 **self.config.opt_kwargs,
             )
         else:
@@ -343,7 +451,7 @@ class BaseTrainer:
     def prepare_all(self):
         if self.config.lifting_training:
             logger.info("[+] Preparing models, optimizers and dataloaders for image prior lifting")
-            attrs = ["minivit_stabilizer", "minivit_stabilizer_opt", "dataloader"]
+            attrs = ["temp_stabilizer", "temp_stabilizer_opt", "dataloader"]
             prepared_objs = self.accelerator.prepare(*[getattr(self, attr) for attr in attrs])
             for attr, obj in zip(attrs, prepared_objs):
                 setattr(self, attr, obj)
@@ -382,7 +490,7 @@ class BaseTrainer:
             else:
                 ema_resume_pth = None
             self.ema_handler = EMAModel(
-                self.unwrap_model(self.minivit_stabilizer),
+                self.unwrap_model(self.temp_stabilizer),
                 decay=self.config.ema_decay,
                 use_ema=self.config.use_ema,
                 ema_resume_pth=ema_resume_pth,
@@ -518,10 +626,9 @@ class BaseTrainer:
         ...
 
     @overload
-    def forward_minivit(self, z: torch.Tensor) -> torch.Tensor:
+    def forward_temp(self, z: torch.Tensor) -> torch.Tensor:
         ...
-
-    
+ 
     def optimize_generator(self):
         with self.accelerator.accumulate(self.G):
             self.unwrap_model(self.D).eval().requires_grad_(False)
@@ -586,31 +693,60 @@ class BaseTrainer:
             self.G.to(self.device)
             logger.info("Generator reloaded to VRAM")
 
-    def optimize_minivit_stabilizer(self):
-        with self.accelerator.accumulate(self.minivit_stabilizer):
+
+    
+    def compute_flow_loss(self, frames):
+        B, T, C, H, W = frames.shape
+        loss = 0.0
+        for i in range(T - 1):
+            frame1 = frames[:, i]
+            frame2 = frames[:, i+1]
+
+            # Compute forward and backward flow using RAFT
+            flow_fw, flow_bw = self.raft_model(frame1, frame2, iters=20, test_mode=False)
+
+            # Warp frame2 to frame1 (implement differentiable warp)
+            warp_img2 = differentiable_warp(frame2, flow_fw)
+
+            # Compute occlusion mask (implement differentiable version)
+            occ_mask, _ = detect_occlusion(flow_fw, flow_bw)
+
+            noc_mask = 1 - occ_mask
+
+            diff = (warp_img2 - frame1) * noc_mask
+            diff_squared = diff ** 2
+            N = torch.sum(noc_mask)
+            N = torch.clamp(N, min=1.0)
+            err += torch.sum(diff_squared) / N
+
+        warping_error = err / (T - 1)
+        return warping_error
+
+    def optimize_temp_stabilizer(self):
+        with self.accelerator.accumulate(self.temp_stabilizer):
             z = self.collect_all_latents()
             z = z.to(self.weight_dtype)
             # ??? No need since ConvNext is no longer on VRAM
             # # Remove the UNet & Encoder of the VAE from the VRAM 
             # self.unload_vram()
-            self.minivit_pred = self.forward_minivit(z)
-            # NOTE: collect_all_latents() and forward_minivit() are separately defined to perform the unloading of models
+            self.temp_pred = self.forward_temp(z)
+            # NOTE: collect_all_latents() and forward_temp() are separately defined to perform the unloading of models
             # since video training requires much more VRAM
             
-            loss_l2 = F.mse_loss(self.minivit_pred, self.batch_inputs.gt, reduction="mean") * self.config.lambda_l2
-            loss_lpips = self.net_lpips(self.minivit_pred, self.batch_inputs.gt).mean() * self.config.lambda_lpips
+            loss_l2 = F.mse_loss(self.temp_pred, self.batch_inputs.gt, reduction="mean") * self.config.lambda_l2
+            loss_lpips = self.net_lpips(self.temp_pred, self.batch_inputs.gt).mean() * self.config.lambda_lpips
             loss_flow = 0. & self.config.lambda_flow
-            loss_minivit_stabilizer = loss_l2 + loss_lpips + loss_flow
+            loss_temp_stabilizer = loss_l2 + loss_lpips + loss_flow
 
-            self.accelerator.backward(loss_minivit_stabilizer)
+            self.accelerator.backward(loss_temp_stabilizer)
             if self.accelerator.sync_gradients:
-                self.accelerator.clip_grad_norm_(self.minivit_stabilizer_params, self.config.max_grad_norm)
-            self.minivit_stabilizer_opt.step()
-            self.minivit_stabilizer_opt.zero_grad()
+                self.accelerator.clip_grad_norm_(self.temp_stabilizer_params, self.config.max_grad_norm)
+            self.temp_stabilizer_opt.step()
+            self.temp_stabilizer_opt.zero_grad()
             self.accelerator.wait_for_everyone()
 
         # Log something
-        loss_dict = dict(minivit_total=loss_minivit_stabilizer, minivit_mse=loss_l2, minivit_lpips=loss_lpips, minivit_flow=loss_flow)
+        loss_dict = dict(temp_total=loss_temp_stabilizer, temp_mse=loss_l2, temp_lpips=loss_lpips, temp_flow=loss_flow)
         return loss_dict
 
     def run(self):
@@ -623,7 +759,7 @@ class BaseTrainer:
                 self.prepare_batch_inputs(batch)
                 bs = len(self.batch_inputs.lq)
                 if self.config.lifting_training:
-                    loss_dict = self.optimize_minivit_stabilizer()
+                    loss_dict = self.optimize_temp_stabilizer()
 
                     for k, v in loss_dict.items():
                         avg_loss = self.accelerator.gather(v.repeat(bs)).mean()
@@ -703,7 +839,7 @@ class BaseTrainer:
         video_logs = dict(
             lq=(self.batch_inputs.lq[:N] + 1) / 2,
             gt=(self.batch_inputs.gt[:N] + 1) / 2,
-            out=(self.minivit_pred[:N] + 1) / 2,
+            out=(self.temp_pred[:N] + 1) / 2,
             prompt=(log_txt_as_img((256, 256), self.batch_inputs.prompt[:N]) + 1) / 2,
         )
         if self.config.use_ema:
@@ -711,7 +847,7 @@ class BaseTrainer:
             self.ema_handler.activate_ema_weights()
             with torch.no_grad():
                 ema_x = self.collect_all_latents()
-                ema_x = self.minivit_stabilizer(ema_x)
+                ema_x = self.temp_stabilizer(ema_x)
                 ema_x = self.decode_all_latents(ema_x)
                 video_logs["G_ema"] = (ema_x[:N] + 1) / 2
             self.ema_handler.deactivate_ema_weights()
@@ -722,7 +858,7 @@ class BaseTrainer:
         for tracker in self.accelerator.trackers:
             if tracker.name == "tensorboard":
                 for tag, images in video_logs.items():
-                    # Convert images (1, T, C, H, W) to (1 * T, C, H, W)
+                    # Convert images (1, T, C, H, W) to (T, C, H, W)
                     images = images.squeeze(0)
                     images = images.float()
                     # Add video to tensorboard

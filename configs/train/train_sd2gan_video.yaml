@@ -30,10 +30,9 @@ dataset:
     batch_transform:
       target: gqvr.dataset.batch_transform.IdentityBatchTransform
 
-# qVAE * minivit config:    
+# qVAE * temp config:    
 model:
-  minivit_cfg:
-    in_max_frames: 64
+  temp_cfg:
     z_channels: 4
     z_resolution: 64
     # heads:  
@@ -72,7 +71,7 @@ resume_ema: true
 
 lambda_lpips: 5
 lambda_l2: 1
-lr_minivit_stabilizer: 1e-5
+lr_temp_stabilizer: 1e-5
 optimizer_type: adam
 opt_kwargs:
   betas: [0.9, 0.999]
