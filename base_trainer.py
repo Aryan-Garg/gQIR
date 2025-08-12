@@ -693,22 +693,21 @@ class BaseTrainer:
             self.G.to(self.device)
             logger.info("Generator reloaded to VRAM")
 
-
     
-    def compute_flow_loss(self, frames):
-        B, T, C, H, W = frames.shape
+    def compute_flow_loss(self, pred_frames, gt_frames):
+        B, T, C, H, W = pred_frames.shape
         loss = 0.0
         for i in range(T - 1):
-            frame1 = frames[:, i]
-            frame2 = frames[:, i+1]
+            frame1 = pred_frames[:, i, ...]
+            frame2 = gt_frames[:, i+1, ...]
 
             # Compute forward and backward flow using RAFT
             flow_fw, flow_bw = self.raft_model(frame1, frame2, iters=20, test_mode=True)
 
-            # Warp frame2 to frame1 (implement differentiable warp)
+            # Differentiable Warp gt frame (t+1) to pred frame (t)
             warp_img2 = differentiable_warp(frame2, flow_fw)
 
-            # Compute occlusion mask (implement differentiable version)
+            # Differentiable Compute occlusion mask 
             occ_mask, _ = detect_occlusion(flow_fw, flow_bw)
 
             noc_mask = 1 - occ_mask
@@ -735,7 +734,7 @@ class BaseTrainer:
             
             loss_l2 = F.mse_loss(self.temp_pred, self.batch_inputs.gt, reduction="mean") * self.config.lambda_l2
             loss_lpips = self.net_lpips(self.temp_pred, self.batch_inputs.gt).mean() * self.config.lambda_lpips
-            loss_flow = 0. & self.config.lambda_flow
+            loss_flow = self.compute_flow_loss(self.temp_pred, self.batch_inputs.gt) * self.config.lambda_flow
             loss_temp_stabilizer = loss_l2 + loss_lpips + loss_flow
 
             self.accelerator.backward(loss_temp_stabilizer)
