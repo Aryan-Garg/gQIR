@@ -703,7 +703,7 @@ class BaseTrainer:
             frame2 = frames[:, i+1]
 
             # Compute forward and backward flow using RAFT
-            flow_fw, flow_bw = self.raft_model(frame1, frame2, iters=20, test_mode=False)
+            flow_fw, flow_bw = self.raft_model(frame1, frame2, iters=20, test_mode=True)
 
             # Warp frame2 to frame1 (implement differentiable warp)
             warp_img2 = differentiable_warp(frame2, flow_fw)
