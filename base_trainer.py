@@ -139,7 +139,6 @@ def load_image(image_file, input_size=448, max_num=12):
 
 ################################# FLOW STUFF #############################################
 
-
 def differentiable_warp(x, flow):
     """
     Warp image or feature x according to flow.
@@ -161,7 +160,6 @@ def differentiable_warp(x, flow):
 
     warped = F.grid_sample(x, new_grid, align_corners=True)
     return warped
-
 
 def compute_flow_magnitude(flow):
     return torch.norm(flow, dim=1, keepdim=True)  # [B, 1, H, W]
@@ -185,7 +183,6 @@ def compute_flow_gradients(flow):
     fy_dv = F.pad(fy_dv, (0, 0, 1, 1))
 
     return fx_du, fx_dv, fy_du, fy_dv
-
 
 def detect_occlusion(fw_flow, bw_flow, img):
     """
@@ -228,7 +225,6 @@ def detect_occlusion(fw_flow, bw_flow, img):
     occlusion = mask.float()  # convert to float mask (0 or 1)
 
     return occlusion, warp_img
-
 
 ##########################################################################################
 
