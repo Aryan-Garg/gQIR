@@ -7,7 +7,7 @@ from PIL import Image
 import torch
 from torch.utils.data.sampler import Sampler
 from torch.utils.data import DataLoader
-from resample2d_package.resample2d import Resample2d
+from .resample2d_package.resample2d import Resample2d
 
 ### custom lib
 # from networks.resample2d_package.modules.resample2d import Resample2d

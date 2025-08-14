@@ -3,10 +3,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from update import BasicUpdateBlock, SmallUpdateBlock
-from extractor import BasicEncoder, SmallEncoder
-from corr import CorrBlock, AlternateCorrBlock
-from utils.utils import bilinear_sampler, coords_grid, upflow8
+from .update import BasicUpdateBlock, SmallUpdateBlock
+from .extractor import BasicEncoder, SmallEncoder
+from .corr import CorrBlock, AlternateCorrBlock
+from .utils.utils import bilinear_sampler, coords_grid, upflow8
 import ipdb
 
 try:
@@ -38,12 +38,6 @@ class RAFT(nn.Module):
             self.context_dim = cdim = 128
             args.corr_levels = 4
             args.corr_radius = 4
-
-        if 'dropout' not in self.args:
-            self.args.dropout = 0
-
-        if 'alternate_corr' not in self.args:
-            self.args.alternate_corr = False
 
         # feature network, context network, and update block
         if args.small:

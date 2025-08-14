@@ -303,16 +303,19 @@ class BaseTrainer:
 
     def init_flow_model(self):
         class RAFT_args:
-            self.mixed_precision = False
-            self.small = False
-            self.alternate_corr = False
-            self.dropout = False
+            mixed_precision = False
+            small = False
+            alternate_corr = False
+            dropout = False
         raft_args = RAFT_args()
 
         self.raft_model = RAFT(raft_args)
-        self.raft_model.load_state_dict(torch.load("/home/argar/apgi/gQVR/pretrained_checkpoints/raft_models_weights/raft-things.pth"))
-
-        self.raft_model = self.raft_model.module
+        raft_things_dict = torch.load("/home/argar/apgi/gQVR/pretrained_checkpoints/raft_models_weights/raft-things.pth")
+        corrected_state_dict = {}
+        for k, v in raft_things_dict.items():
+            k2 = ".".join(k.split(".")[1:])
+            corrected_state_dict[k2] = v
+        self.raft_model.load_state_dict(corrected_state_dict)
         self.raft_model.eval().requires_grad_(False).to(self.device)
         
     def init_internVL(self):
@@ -689,33 +692,32 @@ class BaseTrainer:
             self.G.to(self.device)
             logger.info("Generator reloaded to VRAM")
 
-    
     def compute_flow_loss(self, pred_frames, gt_frames):
         B, T, C, H, W = pred_frames.shape
-        loss = 0.0
+        loss = 0.0 
         for i in range(T - 1):
             frame1 = pred_frames[:, i, ...]
             frame2 = gt_frames[:, i+1, ...]
 
-            # Compute forward and backward flow using RAFT
-            flow_fw, flow_bw = self.raft_model(frame1, frame2, iters=20, test_mode=True)
+            # Compute forward and backward flow using RAFT 
+            flow_fw, flow_bw = self.raft_model(frame1, frame2, iters=20, test_mode=True) 
 
-            # Differentiable Warp gt frame (t+1) to pred frame (t)
-            warp_img2 = differentiable_warp(frame2, flow_fw)
+            # Differentiable Warp gt frame (t+1) to pred frame (t) 
+            warp_img2 = differentiable_warp(frame2, flow_fw) 
 
-            # Differentiable Compute occlusion mask 
-            occ_mask, _ = detect_occlusion(flow_fw, flow_bw)
+            # Differentiable Compute occlusion mask   
+            occ_mask, _ = detect_occlusion(flow_fw, flow_bw)  
 
-            noc_mask = 1 - occ_mask
+            noc_mask = 1 - occ_mask 
 
-            diff = (warp_img2 - frame1) * noc_mask
-            diff_squared = diff ** 2
-            N = torch.sum(noc_mask)
-            N = torch.clamp(N, min=1.0)
-            err += torch.sum(diff_squared) / N
+            diff = (warp_img2 - frame1) * noc_mask 
+            diff_squared = diff ** 2 
+            N = torch.sum(noc_mask) 
+            N = torch.clamp(N, min=1.0) 
+            err += torch.sum(diff_squared) / N  
 
-        warping_error = err / (T - 1)
-        return warping_error
+        warping_error = err / (T - 1) 
+        return warping_error 
 
     def optimize_temp_stabilizer(self):
         with self.accelerator.accumulate(self.temp_stabilizer):
