@@ -184,7 +184,7 @@ def compute_flow_gradients(flow):
 
     return fx_du, fx_dv, fy_du, fy_dv
 
-def detect_occlusion(fw_flow, bw_flow, img):
+def detect_occlusion(fw_flow, bw_flow, img2):
     """
     fw_flow: forward flow from img1 to img2, [B, 2, H, W]
     bw_flow: backward flow from img2 to img1, [B, 2, H, W]
@@ -198,8 +198,8 @@ def detect_occlusion(fw_flow, bw_flow, img):
     # Warp forward flow to img2 frame using backward flow
     fw_flow_warped = differentiable_warp(fw_flow, bw_flow)  # [B, 2, H, W]
 
-    # Warp img to img1 space using backward flow
-    warp_img = differentiable_warp(img, bw_flow)
+    # Warp img2 to img1 space using backward flow
+    warp_img = differentiable_warp(img2, bw_flow)
 
     # Forward-backward flow consistency check
     fb_flow_sum = fw_flow_warped + bw_flow  # should be near zero if consistent
@@ -700,13 +700,11 @@ class BaseTrainer:
             frame2 = gt_frames[:, i+1, ...]
 
             # Compute forward and backward flow using RAFT 
-            flow_fw, flow_bw = self.raft_model(frame1, frame2, iters=20, test_mode=True) 
-
-            # Differentiable Warp gt frame (t+1) to pred frame (t) 
-            warp_img2 = differentiable_warp(frame2, flow_fw) 
+            _, flow_fw = self.raft_model(frame1, frame2, iters=20, test_mode=True) 
+            _, flow_bw = self.raft_model(frame2, frame1, iters=20, test_mode=True) 
 
             # Differentiable Compute occlusion mask   
-            occ_mask, _ = detect_occlusion(flow_fw, flow_bw)  
+            occ_mask, warp_img2 = detect_occlusion(flow_fw, flow_bw, frame2)  
 
             noc_mask = 1 - occ_mask 
 
