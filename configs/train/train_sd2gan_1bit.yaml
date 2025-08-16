@@ -50,11 +50,11 @@ model:
       attn_resolutions: []
       dropout: 0.0
 
-prompt_training: true
+prompt_training: false
 lifting_training: false
 base_model_type: sd2
 base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
-qvae_path: /home/argar/apgi/gQVR/experiments/3bit_vae_10xlr_8xBS/0600000.pt
+qvae_path: /home/argar/apgi/gQVR/experiments/1bit_vae_ls_gtL1_vgg_perceptual_hparam_balanced/1965000.pt
 model_t: 200
 coeff_t: 200
 lora_rank: 256
