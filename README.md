@@ -32,6 +32,8 @@
 
 > python3 infer_sd2GAN_stage2.py --config configs/inference/eval_sd2GAN.yaml
 
+Keep changing the main function for now (make it arg passing only during deployment)
+
 ## <a id="training"></a>Training
 <!-- Arch Image -->
 

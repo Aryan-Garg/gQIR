@@ -139,7 +139,7 @@ class SPCDataset(data.Dataset):
             # img_lq = self.generate_spc_from_gt(img_gt)
             # And comment the following
             img_lq_sum = np.zeros_like(img_gt, dtype=np.float32)
-            bits = 3 # bits
+            bits = 1 # bits
             N = 2**bits - 1
             for i in range(N): # 4-bit (2**4 - 1)
                 img_lq_sum = img_lq_sum + self.generate_spc_from_gt(img_gt)
