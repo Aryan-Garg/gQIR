@@ -1,12 +1,20 @@
 import torch
 import torch.nn as nn
 
+def zero_module(module):
+    """
+    Zero out the parameters of a module and return it.
+    """
+    for p in module.parameters():
+        p.detach().zero_()
+    return module
+
 # SpatioTemporal Attention
 class LocalCubeletAttention(nn.Module):  # b c t h w
     def __init__(self):
         super(LocalCubeletAttention, self).__init__()
-        self.conv1 = nn.Conv3d(in_channels=2, out_channels=4, 
-                               kernel_size=7, padding=7//2, bias=False)
+        self.conv1 = zero_module(nn.Conv3d(in_channels=2, out_channels=4, 
+                               kernel_size=7, padding=7//2, bias=False))
         self.sigmoid = nn.Sigmoid()
     def forward(self, x):
 
@@ -24,7 +32,7 @@ class LocalCubeletAttention(nn.Module):  # b c t h w
 class TemporalLocalAttention(nn.Module):  # b t c
     def __init__(self):
         super(TemporalLocalAttention, self).__init__()
-        self.conv1 = nn.Linear(in_features=2, out_features=1, bias=False)
+        self.conv1 = zero_module(nn.Linear(in_features=2, out_features=1, bias=False))
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
@@ -40,6 +48,8 @@ class TemporalLocalAttention(nn.Module):  # b t c
     
 
 
+
+
 # NOTE: 
 # The 3D conv attention addresses small, local spatial-temporal noise/artifacts.
 # The temporal-only module enforces smoothness along time globally, across all channels.
@@ -48,15 +58,16 @@ class TemporalConsistencyLayer(nn.Module):
         super().__init__()
         self.local_attention = LocalCubeletAttention()  # 3D conv attention (B, C, T, H, W)
         self.temporal_attention = TemporalLocalAttention()  # temporal only (B, T, C)
-    
+        self.gamma = nn.Parameter(torch.zeros(1, 1, 1, 1, 1))  # learnable residual scale; start at 0!
+
     def forward(self, x):  # x shape: [B, T, C, H, W]
         # Permute to (B, C, T, H, W) for 3D conv
-        x = x.permute(0, 2, 1, 3, 4)
-        x = self.local_attention(x)
-        x = x.permute(0, 2, 1, 3, 4)  # back to [B, T, C, H, W]
+        x_res = x.permute(0, 2, 1, 3, 4)
+        x_res = self.local_attention(x_res)
+        x_res = x_res.permute(0, 2, 1, 3, 4)  # back to [B, T, C, H, W]
 
         # Spatial pooling for temporal attention
-        x_pooled = x.mean(dim=[3,4])  # [B, T, C]
+        x_pooled = x_res.mean(dim=[3,4])  # [B, T, C]
 
         # Temporal attention to smooth across frames
         x_temporal = self.temporal_attention(x_pooled)  # [B, T, C]
@@ -65,6 +76,6 @@ class TemporalConsistencyLayer(nn.Module):
         x_temporal = x_temporal.unsqueeze(-1).unsqueeze(-1)  # [B, T, C, 1, 1]
 
         # Multiply original x by temporal attention weights
-        x = x * x_temporal
+        x = x + (self.gamma * x_temporal)
 
         return x

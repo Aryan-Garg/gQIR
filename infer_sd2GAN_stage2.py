@@ -45,6 +45,7 @@ def process(image,prompt,upscale,seed=310):
             prompt=prompt,
             upscale=upscale,
             return_type="pil",
+            only_vae_output=False
         )[0]
     except Exception as e:
         return f"Failed: {e} :("
@@ -189,12 +190,12 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=1):
     reconstructed_pil = result[-1]
     zero_filled_str = str(i+1).zfill(3)
 
-    gt_img_pil.save(os.path.join(output_dir, f"visionsim_gt_{zero_filled_str}.png"))
-    lq_img_pil.save(os.path.join(output_dir, f"visionsim_lq_{zero_filled_str}.png"))
-    reconstructed_pil.save(os.path.join(output_dir, f"visionsim_out_{zero_filled_str}.png"))
+    gt_img_pil.save(os.path.join(output_dir, f"si_gt_{zero_filled_str}.png"))
+    lq_img_pil.save(os.path.join(output_dir, f"si_lq_{zero_filled_str}.png"))
+    reconstructed_pil.save(os.path.join(output_dir, f"si_out_{zero_filled_str}.png"))
     if len(result[-2]) > 50:
         with open(os.path.join(output_dir, f"prompt_{zero_filled_str}.txt"), "w") as f:
             f.write(result[-2])
 
 
-eval_single_image(gt_image_path = "/mnt/disks/behemoth/datasets/LHQ/00000-30000/0085168.png")
+eval_single_image(gt_image_path = "/mnt/disks/behemoth/datasets/DIV2K/DIV2K_train_HR/0243.png")

@@ -69,7 +69,8 @@ class BaseEnhancer:
             lq: torch.Tensor,
             prompt: str,
             upscale: int = 1,
-            return_type: Literal["pt", "np", "pil"] = "pt"):
+            return_type: Literal["pt", "np", "pil"] = "pt",
+            only_vae_output=False):
         
         bs = len(lq)
         
@@ -78,7 +79,11 @@ class BaseEnhancer:
         self.prepare_inputs(batch_size=bs, prompt=prompt)
 
         z_lq = self.vae.encode(lq.to(self.weight_dtype)).mode() 
-        z = self.forward_generator(z_lq) # (N x 4 x 64 x 64) for (N, 3, 512, 512) input
+        if only_vae_output:
+            z = z_lq
+        else:
+            z = self.forward_generator(z_lq) # (N x 4 x 64 x 64) for (N, 3, 512, 512) input
+
         # print(f"[DEBUG] z shape: {z.shape}")
         x = self.vae.decode(z.to(self.weight_dtype)).float()
 
