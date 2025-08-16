@@ -5,7 +5,8 @@ import torch.nn as nn
 class LocalCubeletAttention(nn.Module):  # b c t h w
     def __init__(self):
         super(LocalCubeletAttention, self).__init__()
-        self.conv1 = nn.Conv3d(in_channels=2, out_channels=4, kernel_size=7, padding=7//2, bias=False)
+        self.conv1 = nn.Conv3d(in_channels=2, out_channels=4, 
+                               kernel_size=7, padding=7//2, bias=False)
         self.sigmoid = nn.Sigmoid()
     def forward(self, x):
 
