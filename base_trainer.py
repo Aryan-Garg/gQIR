@@ -694,7 +694,7 @@ class BaseTrainer:
 
     def compute_flow_loss(self, pred_frames, gt_frames):
         B, T, C, H, W = pred_frames.shape
-        loss = 0.0 
+        err = 0.0 
         for i in range(T - 1):
             frame1 = pred_frames[:, i, ...]
             frame2 = gt_frames[:, i+1, ...]
@@ -703,7 +703,7 @@ class BaseTrainer:
             _, flow_fw = self.raft_model(frame1, frame2, iters=20, test_mode=True) 
             _, flow_bw = self.raft_model(frame2, frame1, iters=20, test_mode=True) 
 
-            # Differentiable Compute occlusion mask   
+            # Differentiable occlusion mask   
             occ_mask, warp_img2 = detect_occlusion(flow_fw, flow_bw, frame2)  
 
             noc_mask = 1 - occ_mask 
