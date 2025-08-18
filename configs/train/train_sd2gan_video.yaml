@@ -7,7 +7,7 @@ dataset:
     dataloader_num_workers: 96
     target: gqvr.dataset.spc_video.SPCVideoDataset
     params:
-      file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/combined_video_dataset.txt
+      file_list: /mnt/disks/behemoth/datasets/video_dataset_txt_files/combined_video_dataset.txt
       file_backend_cfg:
         target: gqvr.dataset.file_backend.HardDiskBackend
       out_size: 512
@@ -21,7 +21,7 @@ dataset:
     dataloader_num_workers: 96
     target: gqvr.dataset.spc_video.SPCVideoDataset
     params:
-      file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/random_video_val.txt
+      file_list: /mnt/disks/behemoth/datasets/video_dataset_txt_files/random_video_val.txt
       file_backend_cfg:
         target: gqvr.dataset.file_backend.HardDiskBackend
       out_size: 512
@@ -81,6 +81,7 @@ seed: 310
 max_train_steps: 50000
 gradient_checkpointing: true
 max_grad_norm: 1.0
+gradient_accumulation_steps: 4
 logging_dir: logs
 report_to: tensorboard
 checkpointing_steps: 1000
