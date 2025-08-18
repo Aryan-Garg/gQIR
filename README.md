@@ -42,9 +42,11 @@ Keep changing the main function for now (make it arg passing only during deploym
 
 #### Stage 2 - Adversarial Training with Diffusion Initialization:
 
-> accelerate launch train_sd2GAN.py --config configs/train/train_sd2gan.yaml
+> python3 train_sd2GAN.py --config configs/train/train_sd2gan.yaml
 
 #### Stage 3 - Video Stabilization
+
+> python3 train_ipLifting.py --config configs/train/train_sd2gan_video.yaml
 
 Currently the brightness scale/factor (proportional to PPP) is set to 1.0 for all simulations
 
