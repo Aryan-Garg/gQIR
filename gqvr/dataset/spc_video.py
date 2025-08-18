@@ -51,6 +51,7 @@ class SPCVideoDataset(data.Dataset):
     def load_gt_images(self, video_path: str, max_retry: int = 5):
         gt_images = []
         # print(f"Loading GT video from {video_path}")
+        frame_counter = 0
         for img_name in sorted(os.listdir(video_path)):
             image_path = os.path.join(video_path, img_name)
             # print(f"Loading {image_path}")
@@ -69,6 +70,12 @@ class SPCVideoDataset(data.Dataset):
                 image = np.array(image)
             # hwc, rgb, 0,255, uint8
             gt_images.append(image)
+            
+            frame_counter += 1
+
+            if frame_counter == 64:
+                break
+
         return np.stack(gt_images, axis=0) # thwc
 
 
