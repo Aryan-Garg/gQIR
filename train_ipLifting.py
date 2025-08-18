@@ -94,8 +94,8 @@ class ipLiftingTrainer(BaseTrainer):
                 encoder_hidden_states=self.batch_inputs.c_txt["text_embed"],
             ).sample
             z = self.scheduler.step(eps, self.config.coeff_t, z_in).pred_original_sample
-            zs.append(z)
-        z = torch.stack(zs, dim=1)
+            zs.append(z.unsqueeze(1))  # N 1 C H W
+        z = torch.cat(zs, dim=1)
         return z
     
     def forward_temp(self, z: torch.Tensor) -> torch.Tensor:
@@ -106,7 +106,7 @@ class ipLiftingTrainer(BaseTrainer):
             # Decode the latent z using the VAE
             x = self.vae.decode(z.to(self.weight_dtype) / 0.18215).float()
             xs.append(x)
-        x = torch.stack(xs, dim=1)
+        x = torch.cat(xs, dim=1)
         return x
         
     

@@ -575,10 +575,10 @@ class BaseTrainer:
 
             z_lqs = []
             for i in range(lq_vid.size(1)):
-                this_lq = lq_vid[:, i, :, :, :].to(self.weight_dtype) # N C H W
+                this_lq = lq_vid[:, i, :, :, :].to(self.weight_dtype)  # N C H W
                 this_z_lq = self.vae.encode(this_lq).mode()
-                z_lqs.append(this_z_lq)
-            z_lq = torch.stack(z_lqs, dim=1) # N T C H W
+                z_lqs.append(this_z_lq.unsqueeze(1))  # N 1 C H W
+            z_lq = torch.cat(z_lqs, dim=1)  # N T C H W
 
             timesteps = torch.full((bs,), self.config.model_t, dtype=torch.long, device=self.device)
             self.batch_inputs = BatchInput(

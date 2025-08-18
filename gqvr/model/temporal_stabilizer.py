@@ -79,3 +79,10 @@ class TemporalConsistencyLayer(nn.Module):
         x = x + (self.gamma * x_temporal)
 
         return x
+
+
+if __name__ == "__main__":
+    temp_module = TemporalConsistencyLayer()
+    dummy_in = torch.randn(1, 50, 4, 64, 64, dtype=torch.float32)
+    dummy_out = temp_module(dummy_in)
+    print(dummy_out.size())
