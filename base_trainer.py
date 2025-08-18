@@ -36,6 +36,7 @@ from gqvr.model.core_raft.raft import RAFT
 from gqvr.model.core_raft.utils import flow_viz
 from gqvr.model.core_raft.utils.utils import InputPadder
 
+from gqvr.model.temporal_stabilizer import TemporalConsistencyLayer
 
 logger = get_logger(__name__, log_level="INFO")
 logging.basicConfig(
@@ -297,9 +298,9 @@ class BaseTrainer:
         if self.config.prompt_training:
             self.init_internVL() 
         
-    @overload
     def init_temp_stabilizer(self):
-        ...
+        self.temp_stabilizer = TemporalConsistencyLayer().to(self.device)
+        self.temp_stabilizer.train().requires_grad_(True)
 
     def init_flow_model(self):
         class RAFT_args:
@@ -415,6 +416,8 @@ class BaseTrainer:
             optimizer_cls = None
 
         if self.config.lifting_training:
+            trainable_params = sum(p.numel() for p in self.temp_stabilizer.parameters() if p.requires_grad)
+            print(f"\n[+] Optimizing {trainable_params} parameters for temporal stabilization\n")
             self.temp_stabilizer_params = list(filter(lambda p: p.requires_grad, self.temp_stabilizer.parameters()))
             self.temp_stabilizer_opt = optimizer_cls(
                 self.temp_stabilizer_params,

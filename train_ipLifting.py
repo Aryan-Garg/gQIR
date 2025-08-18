@@ -8,7 +8,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 from argparse import ArgumentParser
 from omegaconf import OmegaConf
 
-from gqvr.model.temporal_stabilizer import TemporalConsistencyLayer
+
 from base_trainer import BaseTrainer
 
 
@@ -28,14 +28,14 @@ class ipLiftingTrainer(BaseTrainer):
 
     def init_generator(self):
         self.G: UNet2DConditionModel = UNet2DConditionModel.from_pretrained(
-           self.base_model_path, subfolder="unet", torch_dtype=self.weight_dtype).to(self.device)
-        target_modules = self.lora_modules
-        G_lora_cfg = LoraConfig(r=self.lora_rank, lora_alpha=self.lora_rank,
+           self.config.base_model_path, subfolder="unet", torch_dtype=self.weight_dtype).to(self.device)
+        target_modules = self.config.lora_modules
+        G_lora_cfg = LoraConfig(r=self.config.lora_rank, lora_alpha=self.config.lora_rank,
            init_lora_weights="gaussian", target_modules=target_modules)
         self.G.add_adapter(G_lora_cfg)
 
-        print(f"Load model weights from {self.weight_path}")
-        state_dict = torch.load(self.weight_path, map_location="cpu", weights_only=False)
+        print(f"Load model weights from {self.config.weight_path}")
+        state_dict = torch.load(self.config.weight_path, map_location="cpu", weights_only=False)
         self.G.load_state_dict(state_dict, strict=False)
         input_keys = set(state_dict.keys())
         required_keys = set([k for k in self.G.state_dict().keys() if "lora" in k])
@@ -43,11 +43,7 @@ class ipLiftingTrainer(BaseTrainer):
         unexpected = input_keys - required_keys
         assert required_keys == input_keys, f"Missing: {missing}, Unexpected: {unexpected}"
 
-        self.G.eval().requires_grad_(False)
-
-    def init_temporal_stabilizer(self):
-        self.temp_stabilizer = TemporalConsistencyLayer().to(self.device)
-        self.temp_stabilizer.train().requires_grad_(True)
+        self.G.eval().requires_grad_(False)       
 
     def encode_prompt(self, prompt: List[str]) -> Dict[str, torch.Tensor]:
         txt_ids = self.tokenizer(
@@ -85,7 +81,7 @@ class ipLiftingTrainer(BaseTrainer):
 
     def collect_all_latents(self):
         zs = []
-        for i in range(len(self.batch_inputs.z_lq.size(1))):
+        for i in range(self.batch_inputs.z_lq.size(1)):
             this_z_lq = self.batch_inputs.z_lq[:, i, ...]
             z_in = this_z_lq * 0.18215 # vae scaling factor
             eps = self.G(
@@ -101,7 +97,7 @@ class ipLiftingTrainer(BaseTrainer):
     def forward_temp(self, z: torch.Tensor) -> torch.Tensor:
         stable_zs = self.temp_stabilizer(z)
         xs = []
-        for i in range(len(stable_zs.size(1))):
+        for i in range(stable_zs.size(1)):
             z = stable_zs[:, i, ...]
             # Decode the latent z using the VAE
             x = self.vae.decode(z.to(self.weight_dtype) / 0.18215).float()
