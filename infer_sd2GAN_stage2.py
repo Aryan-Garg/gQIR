@@ -14,10 +14,9 @@ from gqvr.utils.common import instantiate_from_config
 from gqvr.dataset.utils import srgb_to_linearrgb, emulate_spc, center_crop_arr
 from gqvr.model.generator import SD2Enhancer
 
-
 to_tensor = transforms.ToTensor()
 
-def process(image,prompt,upscale,seed=310):
+def process(image,prompt,upscale, save_Gprocessed_latents: bool = False, fname:str = "", seed=310):
     if seed == -1:
         seed = random.randint(0, 2**32 - 1)
     set_seed(seed)
@@ -45,7 +44,9 @@ def process(image,prompt,upscale,seed=310):
             prompt=prompt,
             upscale=upscale,
             return_type="pil",
-            only_vae_output=False
+            only_vae_output=False,
+            save_Gprocessed_latents=save_Gprocessed_latents,
+            fname=fname
         )[0]
     except Exception as e:
         return f"Failed: {e} :("
@@ -61,51 +62,6 @@ def generate_spc_from_gt(img_gt):
                       factor=1.0 # Brightness directly proportional to this hparam. 1.0 => scene's natural lighting
                     )
     return img
-
-
-################################################# MAIN FUNCTION #################################################
-# Parse command line arguments
-parser = ArgumentParser()
-parser.add_argument("--config", type=str, required=True)
-parser.add_argument("--internvl_caption", action="store_true")
-parser.add_argument("--max_size", type=str, default="512,512", help="Comma-seperated image size")
-parser.add_argument("--device", type=str, default="cuda:5")
-args = parser.parse_args()
-
-# Set device
-if torch.cuda.is_available():
-    device = torch.device(args.device)
-else:
-    device = torch.device("cpu")
-print(f"\nUsing device: {device}\n")
-
-
-if args.internvl_caption:
-    captioner = None
-
-max_size = args.max_size
-if max_size is not None:
-    max_size = tuple(int(x) for x in max_size.split(","))
-    if len(max_size) != 2:
-        raise ValueError(f"Invalid max size: {max_size}")
-    print(f"Max size set to {max_size}, max pixels: {max_size[0] * max_size[1]}")
-
-# Load configuration
-config = OmegaConf.load(args.config)
-if config.base_model_type == "sd2":
-    model = SD2Enhancer(
-        base_model_path=config.base_model_path,
-        weight_path=config.weight_path,
-        lora_modules=config.lora_modules,
-        lora_rank=config.lora_rank,
-        model_t=config.model_t,
-        coeff_t=config.coeff_t,
-        vae_cfg=config.model.vae_cfg,
-        device=args.device,
-    )
-    model.init_models()
-else:
-    raise ValueError(config.base_model_type)
 
 
 def eval_udm():
@@ -198,4 +154,89 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=1):
             f.write(result[-2])
 
 
-eval_single_image(gt_image_path = "/mnt/disks/behemoth/datasets/DIV2K/DIV2K_train_HR/0243.png")
+
+def save_all_video_Gprocessed_latents_to_disk(ds_txt_file):
+    # "/home/argar/apgi/gQVR/dataset_txt_files/video_dataset_txt_files/combined_video_dataset.txt"
+    print(f"Processing {ds_txt_file}")
+    HARDDISK_DIR = "/mnt/disks/behemoth/datasets/"
+    # Get all video paths from txt file
+    video_paths = []
+    with open(ds_txt_file, "r") as fin:
+        for line in fin:
+            p = line.strip()
+            if p:
+                p = p.split(" ")
+                video_path = p[0]
+                video_paths.append(HARDDISK_DIR + video_path[2:])
+
+    for video_path in tqdm(video_paths):
+        for img_name in sorted(os.listdir(video_path)):
+            image_path = os.path.join(video_path, img_name)
+            # print(f"Loading {image_path}")
+            gt_image = Image.open(image_path).convert("RGB")
+            gt_image = center_crop_arr(gt_image, 512)
+            bits = 3
+            N = 2**bits - 1
+            img_lq_sum = np.zeros_like(gt_image, dtype=np.float32)
+            for i in range(N): # 4-bit (2**4 - 1)
+                img_lq_sum = img_lq_sum + generate_spc_from_gt(gt_image)
+            img_lq = img_lq_sum / (1.0*N)
+
+            try:
+                out = process(img_lq, "", upscale= 1.0, save_Gprocessed_latents=True, fname=f"{image_path[:-4]}.pt")
+            except Exception as e:
+                print(e)
+                print(f"[!] Could not save latents for {image_path}  :(")
+
+
+if __name__ == "__main__":
+    
+    # Parse command line arguments
+    parser = ArgumentParser()
+    parser.add_argument("--config", type=str, required=True)
+    parser.add_argument("--internvl_caption", action="store_true")
+    parser.add_argument("--max_size", type=str, default="512,512", help="Comma-seperated image size")
+    parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument("--ds_txt", type=str)
+    args = parser.parse_args()
+
+    # Set device
+    if torch.cuda.is_available():
+        device = torch.device(args.device)
+    else:
+        device = torch.device("cpu")
+    print(f"\nUsing device: {device}\n")
+
+
+    if args.internvl_caption:
+        captioner = None
+
+    max_size = args.max_size
+    if max_size is not None:
+        max_size = tuple(int(x) for x in max_size.split(","))
+        if len(max_size) != 2:
+            raise ValueError(f"Invalid max size: {max_size}")
+        print(f"Max size set to {max_size}, max pixels: {max_size[0] * max_size[1]}")
+
+    # Load configuration
+    config = OmegaConf.load(args.config)
+    if config.base_model_type == "sd2":
+        model = SD2Enhancer(
+            base_model_path=config.base_model_path,
+            weight_path=config.weight_path,
+            lora_modules=config.lora_modules,
+            lora_rank=config.lora_rank,
+            model_t=config.model_t,
+            coeff_t=config.coeff_t,
+            vae_cfg=config.model.vae_cfg,
+            device=args.device,
+        )
+        model.init_models()
+    else:
+        raise ValueError(config.base_model_type)
+
+    # eval_single_image(gt_image_path = "/mnt/disks/behemoth/datasets/DIV2K/DIV2K_train_HR/0243.png")
+    save_all_video_Gprocessed_latents_to_disk(args.ds_txt)
+        
+    
+ 

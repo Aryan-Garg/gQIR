@@ -687,13 +687,15 @@ class BaseTrainer:
             torch.cuda.empty_cache()
             logger.info("Generator unloaded from VRAM")
 
-    def reload_vram(self):
-        if hasattr(self, "vae"):
-            self.vae.encoder.to(self.device)
-            logger.info("vae.encoder reloaded to VRAM")
-        if hasattr(self, "G"):
-            self.G.to(self.device)
-            logger.info("Generator reloaded to VRAM")
+    def reload_vram(self, vae_or_g="vae"):
+        if vae_or_g == "vae":
+            if hasattr(self, "vae"):
+                self.vae.encoder.to(self.device)
+                logger.info("vae.encoder reloaded to VRAM")
+        else:
+            if hasattr(self, "G"):
+                self.G.to(self.device)
+                logger.info("Generator reloaded to VRAM")
 
     def compute_flow_loss(self, pred_frames, gt_frames):
         B, T, C, H, W = pred_frames.shape
@@ -726,7 +728,7 @@ class BaseTrainer:
             z = z.to(self.weight_dtype)
             # ??? No need since ConvNext is no longer on VRAM
             # # Remove the UNet & Encoder of the VAE from the VRAM 
-            # self.unload_vram()
+            self.unload_vram()
             self.temp_pred = self.forward_temp(z)
             # NOTE: collect_all_latents() and forward_temp() are separately defined to perform the unloading of models
             # since video training requires much more VRAM
@@ -789,7 +791,7 @@ class BaseTrainer:
                     
                     # ??? No need since ConvNext is no longer on VRAM
                     # # Reload VAE & UNet to VRAM
-                    # self.reload_vram()
+                    self.reload_vram("G")
 
                 else:
                     generator_step = ((self.batch_count // self.config.gradient_accumulation_steps) % 2) == 0

@@ -70,7 +70,9 @@ class BaseEnhancer:
             prompt: str,
             upscale: int = 1,
             return_type: Literal["pt", "np", "pil"] = "pt",
-            only_vae_output=False):
+            only_vae_output=False,
+            save_Gprocessed_latents=False,
+            fname=None):
         
         bs = len(lq)
         
@@ -85,6 +87,11 @@ class BaseEnhancer:
             z = self.forward_generator(z_lq) # (N x 4 x 64 x 64) for (N, 3, 512, 512) input
 
         # print(f"[DEBUG] z shape: {z.shape}")
+        if save_Gprocessed_latents:
+            assert fname != "", "No file name provided but save G-processed latents is on"
+            torch.save(z.to(self.weight_dtype).detach().cpu(), fname)
+            return 400
+
         x = self.vae.decode(z.to(self.weight_dtype)).float()
 
         if return_type == "pt":
