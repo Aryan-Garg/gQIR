@@ -10,6 +10,7 @@ import numpy as np
 import numpy.typing as npt
 import cv2
 from PIL import Image
+import torch
 import torch.utils.data as data
 
 from .utils import load_video_file_list, center_crop_arr, random_crop_arr, srgb_to_linearrgb, emulate_spc
@@ -35,7 +36,8 @@ class SPCVideoDataset(data.Dataset):
                     file_backend_cfg: Mapping[str, Any],
                     out_size: int,
                     crop_type: str,
-                    use_hflip: bool) -> "SPCVideoDataset":
+                    use_hflip: bool,
+                    precomputed_latents: bool) -> "SPCVideoDataset":
 
         super(SPCVideoDataset, self).__init__()
         self.file_list = file_list
@@ -46,37 +48,47 @@ class SPCVideoDataset(data.Dataset):
         self.use_hflip = use_hflip # No need for 1.5M big dataset
         assert self.crop_type in ["none", "center", "random"]
         self.HARDDISK_DIR = "/mnt/disks/behemoth/datasets/"
+        self.precomputed_latents = precomputed_latents
 
 
     def load_gt_images(self, video_path: str, max_retry: int = 5):
         gt_images = []
+        latents = []
         # print(f"Loading GT video from {video_path}")
         frame_counter = 0
         for img_name in sorted(os.listdir(video_path)):
-            image_path = os.path.join(video_path, img_name)
-            # print(f"Loading {image_path}")
-            image = Image.open(image_path).convert("RGB")
-            # print(f"Loaded GT image size: {image.size}")
-            if self.crop_type != "none":
-                if image.height == self.out_size and image.width == self.out_size:
-                    image = np.array(image)
-                else:
-                    if self.crop_type == "center":
-                        image = center_crop_arr(image, self.out_size)
-                    elif self.crop_type == "random":
-                        image = random_crop_arr(image, self.out_size, min_crop_frac=0.7)
-            else:
-                assert image.height == self.out_size and image.width == self.out_size
-                image = np.array(image)
-            # hwc, rgb, 0,255, uint8
-            gt_images.append(image)
-            
-            frame_counter += 1
+            if self.precomputed_latents:
+                if img_name.endswith(".pt"):
+                    latent = torch.load(os.path.join(video_path, img_name), map_location="cpu") # ensure you only pass in video paths that have precomputed latents
+                    latents.append(latent)
 
+            if img_name.endswith(".png"):
+                image_path = os.path.join(video_path, img_name)
+                # print(f"Loading {image_path}")
+                image = Image.open(image_path).convert("RGB")
+                # print(f"Loaded GT image size: {image.size}")
+                if self.crop_type != "none":
+                    if image.height == self.out_size and image.width == self.out_size:
+                        image = np.array(image)
+                    else:
+                        if self.crop_type == "center":
+                            image = center_crop_arr(image, self.out_size)
+                        elif self.crop_type == "random":
+                            image = random_crop_arr(image, self.out_size, min_crop_frac=0.7)
+                else:
+                    assert image.height == self.out_size and image.width == self.out_size
+                    image = np.array(image)
+                    # hwc, rgb, 0,255, uint8
+            
+            gt_images.append(image)
+            frame_counter += 1
             if frame_counter == 64:
                 break
 
-        return np.stack(gt_images, axis=0) # thwc
+        if self.precomputed_latents:
+            return torch.cat(latents, dim=0), np.stack(gt_images, axis=0) # t x 4 x 64 x 64
+        else:
+            return np.stack(gt_images, axis=0) # thwc
 
 
     def generate_spc_from_gt(self, img_gt):
@@ -114,6 +126,12 @@ class SPCVideoDataset(data.Dataset):
             prompt = self.video_files[index]['prompt']
 
             try:
+                if self.precomputed_latents:
+                    latents, imgs_gt = self.load_gt_images(gt_video_path)
+                    imgs_gt = (imgs_gt / 255.0).astype(np.float32)
+                    gt = (imgs_gt * 2 - 1).astype(np.float32)
+                    return latents, gt
+                
                 imgs_gt = self.load_gt_images(gt_video_path)
                 # print(f"Loaded {imgs_gt.shape[0]} frames from {gt_video_path}")
             except Exception as e:
