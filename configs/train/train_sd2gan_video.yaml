@@ -1,7 +1,8 @@
 output_dir: /home/argar/apgi/gQVR/experiments_video
 
-
 dataset:
+  batch_transform:
+      target: gqvr.dataset.batch_transform.IdentityBatchTransform
   train:
     batch_size: 1
     dataloader_num_workers: 96
@@ -13,8 +14,7 @@ dataset:
       out_size: 512
       crop_type: "center"
       use_hflip: False
-    batch_transform:
-      target: gqvr.dataset.batch_transform.IdentityBatchTransform
+      precomputed_latents: True
 
   val:
     batch_size: 1
@@ -27,6 +27,7 @@ dataset:
       out_size: 512
       crop_type: "center"
       use_hflip: False
+      precomputed_latents: True
     batch_transform:
       target: gqvr.dataset.batch_transform.IdentityBatchTransform
 
@@ -57,20 +58,16 @@ model:
 
 prompt_training: false
 lifting_training: true
-base_model_type: sd2
-base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
-weight_path: /home/argar/apgi/gQVR/experiments/checkpoints_stage2_nullprompt/checkpoint-30000/state_dict.pth
 qvae_path: /home/argar/apgi/gQVR/experiments/3bit_vae_10xlr_8xBS/0600000.pt
-model_t: 200
-coeff_t: 200
-lora_rank: 256
-lora_modules: [to_k, to_q, to_v, to_out.0, conv, conv1, conv2, conv_shortcut, conv_out, proj_in, proj_out, ff.net.2, ff.net.0.proj]
-use_ema: true
-ema_decay: 0.999
-resume_ema: true
 
-lambda_lpips: 5
-lambda_l2: 1
+# Loss params
+loss_mode: "l1_flow_perceptual" # "flow" must | optional: ["l1", "perceptual"] 
+loss_scales:
+  l1: 1.
+  perceptual: 5.
+  flow: 10.
+
+
 lr_temp_stabilizer: 1e-5
 optimizer_type: adam
 opt_kwargs:
@@ -79,12 +76,9 @@ opt_kwargs:
 mixed_precision: bf16
 seed: 310
 max_train_steps: 50000
-gradient_checkpointing: true
-max_grad_norm: 1.0
-gradient_accumulation_steps: 4
-logging_dir: logs
-report_to: tensorboard
 checkpointing_steps: 1000
 checkpoints_total_limit: None
 resume_from_checkpoint: ~
 log_image_steps: 500
+log_every: 1000
+val_every: 5000
