@@ -56,13 +56,14 @@ class TemporalLocalAttention(nn.Module):  # b t c
 class TemporalConsistencyLayer(nn.Module):
     def __init__(self):
         super().__init__()
-        self.local_attention = LocalCubeletAttention()  # 3D conv attention (B, C, T, H, W)
-        self.temporal_attention = TemporalLocalAttention()  # temporal only (B, T, C)
-        self.gamma = nn.Parameter(torch.zeros(1, 1, 1, 1, 1))  # learnable residual scale; start at 0!
+        self.weight_dtype = torch.float32                       # Yes, fixed & hardcoded at max precision since these are <3k params! Relax!
+        self.local_attention = LocalCubeletAttention()          # 3D conv attention (B, C, T, H, W)
+        self.temporal_attention = TemporalLocalAttention()      # Temporal only (B, T, C)
+        self.gamma = nn.Parameter(torch.zeros(1, 1, 1, 1, 1))   # Learnable residual scale; start at 0!
 
     def forward(self, x):  # x shape: [B, T, C, H, W]
         # Permute to (B, C, T, H, W) for 3D conv
-        x_res = x.permute(0, 2, 1, 3, 4)
+        x_res = x.permute(0, 2, 1, 3, 4).to(self.weight_dtype)
         x_res = self.local_attention(x_res)
         x_res = x_res.permute(0, 2, 1, 3, 4)  # back to [B, T, C, H, W]
 
@@ -83,6 +84,6 @@ class TemporalConsistencyLayer(nn.Module):
 
 if __name__ == "__main__":
     temp_module = TemporalConsistencyLayer()
-    dummy_in = torch.randn(1, 50, 4, 64, 64, dtype=torch.float32)
+    dummy_in = torch.randn(1, 64, 4, 64, 64, dtype=torch.float32)
     dummy_out = temp_module(dummy_in)
     print(dummy_out.size())
