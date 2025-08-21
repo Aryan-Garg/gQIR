@@ -6,7 +6,7 @@ dataset:
   train:
     batch_size: 1
     num_workers: 96
-    target: gqvr.dataset.spc_video.SPCVideoDataset
+    target: gqvr.dataset.spc_video.SlidingLatentVideoDataset
     params:
       file_list: /home/argar/apgi/gQVR/dataset_txt_files/video_dataset_txt_files/saved_latents_vids.txt
       file_backend_cfg:
@@ -15,11 +15,13 @@ dataset:
       crop_type: "center"
       use_hflip: False
       precomputed_latents: True
+      sliding_window: 3
+      chunk_size: 4
 
   val:
     batch_size: 1
     num_workers: 96
-    target: gqvr.dataset.spc_video.SPCVideoDataset
+    target: gqvr.dataset.spc_video.SlidingLatentVideoDataset
     params:
       file_list: /home/argar/apgi/gQVR/dataset_txt_files/video_dataset_txt_files/saved_latents_vids_val.txt
       file_backend_cfg:
@@ -28,6 +30,8 @@ dataset:
       crop_type: "center"
       use_hflip: False
       precomputed_latents: True
+      sliding_window: 3
+      chunk_size: 4
     batch_transform:
       target: gqvr.dataset.batch_transform.IdentityBatchTransform
 
@@ -65,7 +69,7 @@ loss_mode: "l1_flow_perceptual" # "flow" must | optional: ["l1", "perceptual"]
 loss_scales:
   l1: 1.
   perceptual: 5.
-  flow: 10.
+  flow: 100.
 
 
 lr_temp_stabilizer: 1e-5
