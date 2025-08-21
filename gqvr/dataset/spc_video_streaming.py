@@ -101,27 +101,6 @@ class SlidingLatentVideoDataset(IterableDataset):
             for start_idx in range(0, T_total - self.chunk_size + 1, self.sliding_window): # Currently manually set in the init fn
                 chunk = latents[start_idx:start_idx + self.chunk_size]  # [T, C, H, W]
                 gt_chunk = gts[start_idx:start_idx + self.chunk_size] 
-                yield {
-                    "latents": chunk,        # [T, C, H, W]
-                    "gts": gt_chunk,
-                    "video_path": video_path
-                }
+                yield {"latents": chunk,        # [T, C, H, W]
+                        "gts": gt_chunk}
     
-
-# if __name__ == "__main__":
-#     # Testing/Example usage
-#     dataset = SPCVideoDataset(
-#         file_list="/home/argar/apgi/gQVR/dataset_txt_files/udm10_video.txt",
-#         file_backend_cfg={"target": "gqvr.dataset.file_backend.HardDiskBackend"},
-#         out_size=512,
-#         crop_type="center",
-#         use_hflip=False,
-#     )
-#     print(f"Complete Dataset length: {len(dataset)}")
-#     sample = next(iter(dataset))
-#     print(f"Sample GT shape: {sample[0].shape}, LQ shape: {sample[1].shape}, Prompt: {sample[2]}, Video Path: {sample[3]}")
-#     print(f"GT Range: {np.amax(sample[0])} | {np.amin(sample[0])}")
-#     print(f"SPC Range: {np.amax(sample[1])} | {np.amin(sample[1])}")
-#     # import matplotlib.pyplot as plt
-    # plt.imsave("GT.png", (sample[0] - np.amin(sample[0])) / (np.amax(sample[0]) - np.amin(sample[0])))
-    # plt.imsave("SPC.png", (sample[1] - np.amin(sample[1])) / (np.amax(sample[1]) - np.amin(sample[1])))

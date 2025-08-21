@@ -379,7 +379,6 @@ def main(args) -> None:
             if cfg.dataset.train.params.precomputed_latents:
                 zs = batch["latents"] # B T 4 64 64
                 gts = batch["gts"].permute(0, 1, 4, 2, 3) # B T C H W to match decoder output
-                pbar.set_description(f"Processing {batch['video_path']} ...")
 
                 stable_zs = temp_stabilizer(zs) # B T 4 64 64
                 
