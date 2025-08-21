@@ -324,7 +324,6 @@ def main(args) -> None:
         dataset=dataset,
         batch_size=cfg.dataset.train.batch_size,
         num_workers=cfg.dataset.train.num_workers,
-        shuffle=True,
         drop_last=True,
     )
     val_dataset = instantiate_from_config(cfg.dataset.val)
@@ -332,11 +331,8 @@ def main(args) -> None:
         dataset=val_dataset,
         batch_size=cfg.dataset.val.batch_size,
         num_workers=cfg.dataset.val.num_workers,
-        shuffle=False,
         drop_last=False,
     )
-    if accelerator.is_local_main_process:
-        print(f"Dataset contains {len(dataset)} videos from {dataset.file_list}")
 
     batch_transform = instantiate_from_config(cfg.dataset.batch_transform)
 
@@ -349,7 +345,6 @@ def main(args) -> None:
     # Variables for monitoring/logging purposes:
     global_step = 0
     max_steps = cfg.max_train_steps
-    step_loss = []
     step_l1_loss = []
     step_perceptual_loss = []
     step_flow_loss = []
@@ -371,14 +366,13 @@ def main(args) -> None:
         print(f"Training for {max_steps} steps...")
 
     # Training loop:
-    while global_step < max_steps:
-        pbar = tqdm(
+    pbar = tqdm(
             iterable=None,
             disable=not accelerator.is_local_main_process,
-            unit="batch",
-            total=len(loader),
+            unit="step",
+            total=max_steps
         )
-
+    while global_step < max_steps:
         for batch in loader:
             to(batch, device)
             batch = batch_transform(batch)
@@ -410,10 +404,6 @@ def main(args) -> None:
             step_l1_loss.append(loss_dict["l1_loss"])
             step_perceptual_loss.append(loss_dict["perceptual"])
             epoch_loss.append(loss.item())
-            pbar.update(1)
-            pbar.set_description(
-                f"Epoch: {epoch:04d}, Global Step: {global_step:07d}, Loss: {loss.item():.6f}"
-            )
 
             # Log loss values:
             if global_step % cfg.log_every == 0 or global_step == 1:
@@ -439,7 +429,7 @@ def main(args) -> None:
                     .mean()
                     .item()
                 )
-                step_loss.clear()
+
                 step_flow_loss.clear()
                 step_l1_loss.clear()
                 step_perceptual_loss.clear()
@@ -497,7 +487,6 @@ def main(args) -> None:
                     iterable=None,
                     disable=not accelerator.is_local_main_process,
                     unit="batch",
-                    total=len(val_loader),
                     leave=False,
                     desc="Validation",
                 )
@@ -516,7 +505,7 @@ def main(args) -> None:
                                                                               "l1_flow_perceptual", cfg.loss_scales,
                                                                               chunk_T=1)
                         psnr = 0.
-                        for i in range(gts.size(1)):
+                        for i in range(val_gts.size(1)):
                             psnr = psnr + calculate_psnr_pt(val_pred[:, i, ...], val_gts[:, i, ...], crop_border=0).mean().item()
                         val_psnr.append(psnr)
                         val_loss.append(vloss.item())
@@ -559,7 +548,10 @@ def main(args) -> None:
             if global_step == max_steps:
                 break
 
-        pbar.close()
+            pbar.update(1)
+            pbar.set_description(
+                f"Epoch: {epoch:04d}, Global Step: {global_step:06d}, Loss: {loss.item():.6f}"
+            )
         epoch += 1
         avg_epoch_loss = (
             accelerator.gather(torch.tensor(epoch_loss, device=device).unsqueeze(0))
@@ -573,6 +565,7 @@ def main(args) -> None:
     if accelerator.is_local_main_process:
         print("Done!")
         writer.close()
+        pbar.close()
 
 
 if __name__ == "__main__":

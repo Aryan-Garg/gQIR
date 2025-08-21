@@ -79,7 +79,7 @@ opt_kwargs:
 
 mixed_precision: bf16
 seed: 310
-max_train_steps: 50000
+max_train_steps: 500000
 checkpointing_steps: 1000
 checkpoints_total_limit: None
 resume_from_checkpoint: ~
