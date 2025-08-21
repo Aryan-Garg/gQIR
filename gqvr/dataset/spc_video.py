@@ -139,7 +139,7 @@ class SPCVideoDataset(data.Dataset):
                 if self.precomputed_latents:
                     latents, imgs_gt = self.load_gt_images(gt_video_path)
                     imgs_gt = (imgs_gt / 255.0).astype(np.float32)
-                    gt = (imgs_gt * 2 - 1).astype(np.float32)
+                    gt = ((imgs_gt * 2) - 1).astype(np.float32)
                     return latents, gt
                 
                 imgs_gt = self.load_gt_images(gt_video_path)

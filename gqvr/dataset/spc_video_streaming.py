@@ -93,6 +93,8 @@ class SlidingLatentVideoDataset(IterableDataset):
             video_path = video_info["video_path"]
 
             latents, gts = self._load_video(video_path)
+            gts = (gts / 255.0).astype(np.float32)
+            gts = ((gts * 2) - 1).astype(np.float32)
             if latents is None or len(latents) < self.chunk_size:
                 continue
 

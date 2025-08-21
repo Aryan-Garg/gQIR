@@ -29,7 +29,7 @@ from gqvr.model.core_raft.utils import flow_viz
 from gqvr.model.core_raft.utils.utils import InputPadder
 
 import cv2
-
+from PIL import Image
 
 ################################# FLOW STUFF #############################################
 
@@ -222,8 +222,8 @@ def compute_stage3_loss_streaming(zs, gts, vae, lpips_model, raft_model, loss_mo
 
             # Flow (use decoded preds; change to GT flow supervision if you prefer)
             if do_flow and prev_dec is not None:
-                _, flow_fw = raft_model(prev_dec, dec_t, iters=18, test_mode=True)
-                _, flow_bw = raft_model(dec_t, prev_dec, iters=18, test_mode=True)
+                _, flow_fw = raft_model(prev_dec, dec_t, iters=20, test_mode=True)
+                _, flow_bw = raft_model(dec_t, prev_dec, iters=20, test_mode=True)
                 occ, warp_to_prev = detect_occlusion(flow_fw, flow_bw, dec_t)
                 noc = 1.0 - occ
                 diff = (prev_dec - warp_to_prev) * noc
@@ -386,16 +386,16 @@ def main(args) -> None:
                 # # ^^^ Necessary Optimization for VRAM. Restricts bs to 1 but that is fine since each video has so many frames! --- Still too big
 
                 # preds = preds.unsqueeze(0)
-              
+                
                 with torch.amp.autocast("cuda", dtype=torch.float16):
                     loss, loss_dict = compute_stage3_loss_streaming(stable_zs, gts, vae, lpips_model, raft_model=raft_model, 
                                                       loss_mode="l1_flow_perceptual", scales=cfg.loss_scales, chunk_T = 1)
             else:
                 raise NotImplementedError("[!] Precomputing latents saves tons of VRAM! Don't train without pre-computing unless you are FAANG")
 
-            opt.zero_grad()
             accelerator.backward(loss)
             opt.step()
+            opt.zero_grad()
             accelerator.wait_for_everyone()
 
             global_step += 1
@@ -454,25 +454,18 @@ def main(args) -> None:
                         log_zs = stable_zs[:, :N]
                         log_preds = vae.decode(log_zs.squeeze(0))
                         log_preds = (log_preds.unsqueeze(0).cpu() + 1) / 2
+                    
+                    log_gt_arr = (log_gt * 255.).squeeze(0).permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8).contiguous().numpy()
+                    log_pred_arr = (log_preds * 255.).squeeze(0).permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8).contiguous().numpy()
 
-                    fourcc = cv2.VideoWriter_fourcc(*"XVID") # Codec for .mp4
-                    fps = 24.0
-                    frame_size = (512, 512) # Width, Height of your image frames
-
-                    save_dir = os.path.join(cfg.output_dir, "log_vids", f"{global_step:06}")
+                    save_dir = os.path.join(
+                        cfg.output_dir, "log_videos", f"{global_step:06}")
                     if not os.path.exists(save_dir):
                         os.makedirs(save_dir)
 
-                    out_gt = cv2.VideoWriter(os.path.join(save_dir, f"gt.avi"), fourcc, fps, frame_size)
-                    out_pred = cv2.VideoWriter(os.path.join(save_dir, f"pred.avi"), fourcc, fps, frame_size)
-                    
-                    log_gt_arr = (log_gt * 255.).clamp(0, 255).squeeze(0).permute(0, 2, 3, 1).to(torch.uint8).numpy()
-                    log_pred_arr = (log_preds * 255.).clamp(0, 255).squeeze(0).permute(0, 2, 3, 1).to(torch.uint8).numpy()
                     for i in range(N):
-                        out_gt.write(log_gt_arr[i])
-                        out_pred.write(log_pred_arr[i])
-                    out_gt.release()
-                    out_pred.release()
+                        Image.fromarray(log_gt_arr[i]).save(os.path.join(save_dir, f"gt_frame_{i}.png"))
+                        Image.fromarray(log_pred_arr[i]).save(os.path.join(save_dir, f"pred_frame_{i}.png"))
 
             # Evaluate model:
             if global_step % cfg.val_every == 0:
@@ -548,9 +541,9 @@ def main(args) -> None:
                 break
 
             pbar.update(1)
-            pbar.set_description(
-                f"Epoch: {epoch:04d}, Global Step: {global_step:06d}, Loss: {loss.item():.6f}"
-            )
+        pbar.set_description(
+            f"Epoch: {epoch:04d}, Global Step: {global_step:06d}, Loss: {loss.item():.6f}"
+        )
         epoch += 1
         avg_epoch_loss = (
             accelerator.gather(torch.tensor(epoch_loss, device=device).unsqueeze(0))
