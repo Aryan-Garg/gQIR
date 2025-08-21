@@ -46,10 +46,10 @@ def process(image,prompt,upscale, save_Gprocessed_latents: bool = False, fname:s
             return_type="pil",
             only_vae_output=False,
             save_Gprocessed_latents=save_Gprocessed_latents,
-            fname=fname
-        )[0]
+            fname=fname 
+        )[0] 
     except Exception as e:
-        return f"Failed: {e} :("
+        return f"Failed: {e} :(" 
 
     return pil_image, f"Used prompt: {prompt}"
 

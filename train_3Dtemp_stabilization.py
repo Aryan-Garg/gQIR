@@ -221,8 +221,8 @@ def compute_stage3_loss_streaming(zs, gts, vae, lpips_model, raft_model, loss_mo
 
             # Flow (use decoded preds; change to GT flow supervision if you prefer)
             if do_flow and prev_dec is not None:
-                _, flow_fw = raft_model(prev_dec, dec_t, iters=15, test_mode=True)
-                _, flow_bw = raft_model(dec_t, prev_dec, iters=15, test_mode=True)
+                _, flow_fw = raft_model(prev_dec, dec_t, iters=16, test_mode=True)
+                _, flow_bw = raft_model(dec_t, prev_dec, iters=16, test_mode=True)
                 occ, warp_to_prev = detect_occlusion(flow_fw, flow_bw, dec_t)
                 noc = 1.0 - occ
                 diff = (prev_dec - warp_to_prev) * noc
@@ -464,13 +464,13 @@ def main(args) -> None:
                     with torch.no_grad():
                         log_zs = stable_zs[:, :N]
                         log_preds = vae.decode(log_zs.squeeze(0))
-                        log_preds.unsqueeze(0)
+                        log_preds = log_preds.unsqueeze(0).cpu()
 
                     fourcc = cv2.VideoWriter_fourcc(*'mp4v') # Codec for .mp4
                     fps = 24
                     frame_size = (512, 512) # Width, Height of your image frames
 
-                    save_dir = os.path.join(cfg.output_dir, "log_images", f"{global_step:07}")
+                    save_dir = os.path.join(cfg.output_dir, "log_vids", f"{global_step:07}")
                     if not os.path.exists(save_dir):
                         os.makedirs(save_dir)
 

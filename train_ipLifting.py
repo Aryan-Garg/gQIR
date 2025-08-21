@@ -11,6 +11,7 @@ from omegaconf import OmegaConf
 
 from base_trainer import BaseTrainer
 
+# NOTE: Couldn't fit on VRAM properly. Never used.
 
 logger = get_logger(__name__, log_level="INFO")
 
