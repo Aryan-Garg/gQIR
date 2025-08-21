@@ -55,38 +55,48 @@ class SPCVideoDataset(data.Dataset):
         gt_images = []
         latents = []
         # print(f"Loading GT video from {video_path}")
+        max_frames = 4
         frame_counter = 0
+        # print(f"Extracting from {video_path}")
         for img_name in sorted(os.listdir(video_path)):
+            # print(f"This file: {os.path.join(video_path, img_name)}")
             if self.precomputed_latents:
                 if img_name.endswith(".pt"):
                     latent = torch.load(os.path.join(video_path, img_name), map_location="cpu") # ensure you only pass in video paths that have precomputed latents
                     latents.append(latent)
 
-            if img_name.endswith(".png"):
-                image_path = os.path.join(video_path, img_name)
-                # print(f"Loading {image_path}")
-                image = Image.open(image_path).convert("RGB")
-                # print(f"Loaded GT image size: {image.size}")
-                if self.crop_type != "none":
-                    if image.height == self.out_size and image.width == self.out_size:
-                        image = np.array(image)
+                if img_name.endswith(".png"):
+                    if not os.path.exists(os.path.join(video_path, f"{img_name[:-4]}.pt")):
+                        print(f"Exiting cause no more pre-computed latents exist for (& after) the img: {img_name} for video: {video_path}\nFix txt file or pre-compute latents for this video dumbass!")
+                        break
+                    image_path = os.path.join(video_path, img_name)
+                    # print(f"Loading {image_path}")
+                    image = Image.open(image_path).convert("RGB")
+                    # print(f"Loaded GT image size: {image.size}")
+                    if self.crop_type != "none":
+                        if image.height == self.out_size and image.width == self.out_size:
+                            image = np.array(image)
+                        else:
+                            if self.crop_type == "center":
+                                image = center_crop_arr(image, self.out_size)
+                            elif self.crop_type == "random":
+                                image = random_crop_arr(image, self.out_size, min_crop_frac=0.7)
                     else:
-                        if self.crop_type == "center":
-                            image = center_crop_arr(image, self.out_size)
-                        elif self.crop_type == "random":
-                            image = random_crop_arr(image, self.out_size, min_crop_frac=0.7)
-                else:
-                    assert image.height == self.out_size and image.width == self.out_size
-                    image = np.array(image)
-                    # hwc, rgb, 0,255, uint8
+                        assert image.height == self.out_size and image.width == self.out_size
+                        image = np.array(image)
+                        # hwc, rgb, 0,255, uint8
             
-            gt_images.append(image)
-            frame_counter += 1
-            if frame_counter == 64:
-                break
+                    gt_images.append(image)
+                    frame_counter += 1
+                    if frame_counter == 64:
+                        break
+        
+        start_rdx = random.randint(0, len(latents)-max_frames-1)
+        latents = latents[start_rdx : start_rdx+max_frames]
+        gt_images = gt_images[start_rdx: start_rdx+max_frames]
 
         if self.precomputed_latents:
-            return torch.cat(latents, dim=0), np.stack(gt_images, axis=0) # t x 4 x 64 x 64
+            return torch.cat(latents, dim=0), np.stack(gt_images, axis=0) # t x 4 x 64 x 64, t h w c
         else:
             return np.stack(gt_images, axis=0) # thwc
 
