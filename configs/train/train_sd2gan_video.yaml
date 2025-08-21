@@ -5,10 +5,10 @@ dataset:
       target: gqvr.dataset.batch_transform.IdentityBatchTransform
   train:
     batch_size: 1
-    dataloader_num_workers: 96
+    num_workers: 96
     target: gqvr.dataset.spc_video.SPCVideoDataset
     params:
-      file_list: /mnt/disks/behemoth/datasets/video_dataset_txt_files/combined_video_dataset.txt
+      file_list: /home/argar/apgi/gQVR/dataset_txt_files/video_dataset_txt_files/saved_latents_vids.txt
       file_backend_cfg:
         target: gqvr.dataset.file_backend.HardDiskBackend
       out_size: 512
@@ -18,10 +18,10 @@ dataset:
 
   val:
     batch_size: 1
-    dataloader_num_workers: 96
+    num_workers: 96
     target: gqvr.dataset.spc_video.SPCVideoDataset
     params:
-      file_list: /mnt/disks/behemoth/datasets/video_dataset_txt_files/random_video_val.txt
+      file_list: /home/argar/apgi/gQVR/dataset_txt_files/video_dataset_txt_files/saved_latents_vids_val.txt
       file_backend_cfg:
         target: gqvr.dataset.file_backend.HardDiskBackend
       out_size: 512
