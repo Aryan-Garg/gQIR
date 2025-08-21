@@ -29,7 +29,9 @@ class SlidingLatentVideoDataset(IterableDataset):
                     out_size: int,
                     crop_type: str,
                     use_hflip: bool,
-                    precomputed_latents: bool) -> "SlidingLatentVideoDataset":
+                    precomputed_latents: bool, 
+                    sliding_window: int,
+                    chunk_size: int) -> "SlidingLatentVideoDataset":
         """
         Args:
             video_files (list of dict): each dict must contain:
@@ -47,7 +49,8 @@ class SlidingLatentVideoDataset(IterableDataset):
         assert self.crop_type in ["none", "center", "random"]
         self.HARDDISK_DIR = "/mnt/disks/behemoth/datasets/"
         self.precomputed_latents = precomputed_latents
-        self.sliding_window = 3
+        self.sliding_window = sliding_window
+        self.chunk_size = chunk_size
 
 
     def _load_video(self, video_path):

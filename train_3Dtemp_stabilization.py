@@ -179,6 +179,7 @@ def compute_stage3_loss(preds, gts, lpips_model, raft_model, loss_mode, scales):
     total_loss = flow_loss + l1_loss + perceptual_loss
     return total_loss, loss_dict
 
+
 def compute_stage3_loss_streaming(zs, gts, vae, lpips_model, raft_model, loss_mode, scales, chunk_T=1):
     B, T, Cz, Hz, Wz = zs.shape
     _, _, Cx, Hx, Wx = gts.shape
@@ -221,8 +222,8 @@ def compute_stage3_loss_streaming(zs, gts, vae, lpips_model, raft_model, loss_mo
 
             # Flow (use decoded preds; change to GT flow supervision if you prefer)
             if do_flow and prev_dec is not None:
-                _, flow_fw = raft_model(prev_dec, dec_t, iters=16, test_mode=True)
-                _, flow_bw = raft_model(dec_t, prev_dec, iters=16, test_mode=True)
+                _, flow_fw = raft_model(prev_dec, dec_t, iters=18, test_mode=True)
+                _, flow_bw = raft_model(dec_t, prev_dec, iters=18, test_mode=True)
                 occ, warp_to_prev = detect_occlusion(flow_fw, flow_bw, dec_t)
                 noc = 1.0 - occ
                 diff = (prev_dec - warp_to_prev) * noc
@@ -382,12 +383,11 @@ def main(args) -> None:
             to(batch, device)
             batch = batch_transform(batch)
             if cfg.dataset.train.params.precomputed_latents:
-                zs, gts = batch # B T 4 64 64, B T H W C
-                gts = gts.permute(0, 1, 4, 2, 3) #B T C H W to match decoder output
-                zs = zs.to(device)
+                zs = batch["latents"] # B T 4 64 64
+                gts = batch["gts"].permute(0, 1, 4, 2, 3) # B T C H W to match decoder output
+                pbar.set_description(f"Processing {batch["video_path"]}...")
 
                 stable_zs = temp_stabilizer(zs) # B T 4 64 64
-
                 
                 # preds = vae.decode(stable_zs.squeeze(0)) # TCHW is treated as BCHW now ;) 
                 # # ^^^ Necessary Optimization for VRAM. Restricts bs to 1 but that is fine since each video has so many frames! --- Still too big
@@ -416,7 +416,7 @@ def main(args) -> None:
             )
 
             # Log loss values:
-            if global_step % cfg.log_every == 0:
+            if global_step % cfg.log_every == 0 or global_step == 1:
                 # Gather values from all processes
                 avg_flow_loss = (
                     accelerator.gather(
@@ -459,23 +459,23 @@ def main(args) -> None:
             # Log images
             if global_step % cfg.log_image_steps == 0 or global_step == 1:
                 N = min(8, gts.size(1))
-                log_gt = gts[:, :N, ...].cpu()
+                log_gt = (gts[:, :N, ...].cpu() + 1) / 2
                 if accelerator.is_local_main_process: 
                     with torch.no_grad():
                         log_zs = stable_zs[:, :N]
                         log_preds = vae.decode(log_zs.squeeze(0))
-                        log_preds = log_preds.unsqueeze(0).cpu()
+                        log_preds = (log_preds.unsqueeze(0).cpu() + 1) / 2
 
-                    fourcc = cv2.VideoWriter_fourcc(*'mp4v') # Codec for .mp4
-                    fps = 24
+                    fourcc = cv2.VideoWriter_fourcc(*"XVID") # Codec for .mp4
+                    fps = 24.0
                     frame_size = (512, 512) # Width, Height of your image frames
 
-                    save_dir = os.path.join(cfg.output_dir, "log_vids", f"{global_step:07}")
+                    save_dir = os.path.join(cfg.output_dir, "log_vids", f"{global_step:06}")
                     if not os.path.exists(save_dir):
                         os.makedirs(save_dir)
 
-                    out_gt = cv2.VideoWriter(os.path.join(save_dir, f"gt.mp4"), fourcc, fps, frame_size)
-                    out_pred = cv2.VideoWriter(os.path.join(save_dir, f"pred.mp4"), fourcc, fps, frame_size)
+                    out_gt = cv2.VideoWriter(os.path.join(save_dir, f"gt.avi"), fourcc, fps, frame_size)
+                    out_pred = cv2.VideoWriter(os.path.join(save_dir, f"pred.avi"), fourcc, fps, frame_size)
                     
                     log_gt_arr = (log_gt * 255.).clamp(0, 255).squeeze(0).permute(0, 2, 3, 1).to(torch.uint8).numpy()
                     log_pred_arr = (log_preds * 255.).clamp(0, 255).squeeze(0).permute(0, 2, 3, 1).to(torch.uint8).numpy()
@@ -504,7 +504,8 @@ def main(args) -> None:
                 for val_batch in val_loader:
                     to(val_batch, device)
                     val_batch = batch_transform(val_batch)
-                    val_zs, val_gts = val_batch # B T 4 64 64, B T H W C
+                    val_zs = val_batch["latents"] # B T 4 64 64
+                    val_gts = val_batch["gts"]
                     with torch.no_grad():
                         stable_zs = temp_stabilizer(val_zs) # B T 4 64 64
                         val_pred = vae.decode(stable_zs.squeeze(0))
