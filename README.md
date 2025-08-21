@@ -52,7 +52,7 @@ Keep changing the main function for now (make it arg passing only during deploym
 > python3 infer_sd2GAN_stage2.py --config configs/inference/eval_sd2GAN.yaml --device "cuda:7" --ds_txt dataset_txt_files/video_dataset_txt_files/combined_part07.txt
 
 **Training Lifting Stage:**
-> 
+> CUDA_VISIBLE_DEVICES="1,2,3,4,5,6" accelerate launch train_3Dtemp_stabilization.py --config configs/train/train_sd2gan_video.yaml
 
 Currently the brightness scale/factor (proportional to PPP) is set to 1.0 for all simulations
 
