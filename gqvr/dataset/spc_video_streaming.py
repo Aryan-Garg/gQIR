@@ -55,16 +55,17 @@ class SlidingLatentVideoDataset(IterableDataset):
 
     def _load_video(self, video_path):
         """Load all precomputed latent tensors from a single video folder."""
-        latent_files = sorted([f for f in os.listdir(video_path) if f.endswith(".pt")])
+        correct_video_path =  self.HARDDISK_DIR + video_path[2:]
+        latent_files = sorted([f for f in os.listdir(correct_video_path) if f.endswith(".pt")])
         latents = []
         for lf in latent_files:
-            latent = torch.load(os.path.join(video_path, lf), map_location="cpu")  # [1, 4 , 64, 64]
+            latent = torch.load(os.path.join(correct_video_path, lf), map_location="cpu")  # [1, 4 , 64, 64]
             latents.append(latent)
 
-        png_files = sorted([f for f in os.listdir(video_path) if f.endswith(".png")])
+        png_files = sorted([f for f in os.listdir(correct_video_path) if f.endswith(".png")])
         gts = []
         for img_name in png_files:
-            image_path = os.path.join(video_path, img_name)
+            image_path = os.path.join(correct_video_path, img_name)
             image = Image.open(image_path).convert("RGB")
             # print(f"Loaded GT image size: {image.size}")
             if self.crop_type != "none":
