@@ -28,6 +28,7 @@ from gqvr.model.core_raft.raft import RAFT
 from gqvr.model.core_raft.utils import flow_viz
 from gqvr.model.core_raft.utils.utils import InputPadder
 
+import cv2
 
 
 ################################# FLOW STUFF #############################################
@@ -121,6 +122,17 @@ def detect_occlusion(fw_flow, bw_flow, img2):
 
 ##########################################################################################
 
+def print_vram_state(msg=None, logger=None):
+    alloc = torch.cuda.memory_allocated() / 1024**3
+    cache = torch.cuda.memory_reserved() / 1024**3
+    peak = torch.cuda.max_memory_allocated() / 1024**3
+    if logger:
+        logger.info(
+            f"[GPU memory]: {msg}, allocated = {alloc:.2f} GB, "
+            f"cached = {cache:.2f} GB, peak = {peak:.2f} GB"
+        )
+    return alloc, cache, peak
+
 
 def compute_flow_loss(pred_frames, gt_frames, raft_model):
     B, T, C, H, W = pred_frames.shape
@@ -153,18 +165,83 @@ def compute_stage3_loss(preds, gts, lpips_model, raft_model, loss_mode, scales):
         loss_dict["flow"] = flow_loss.item()
 
         if "gt" in loss_mode:
-            gt_loss = scales.gt * F.l1_loss(preds, gts, reduction="sum")
-            loss_dict["L1_loss"] = gt_loss.item()
+            l1_loss = scales.l1 * F.l1_loss(preds, gts, reduction="sum")
+            loss_dict["L1_loss"] = l1_loss.item()
 
         if "perceptual" in loss_mode:
             perceptual_loss = 0.
-            for i in range(len(gts.size(1))):
-                perceptual_loss = perceptual_loss + (scales.perceptual_gt * lpips_model(preds[:, i, :, :, :], gts[:, i, :, :, :])).item()
+            for i in range(gts.size(1)):
+                perceptual_loss = perceptual_loss + (scales.perceptual * lpips_model(preds[:, i, :, :, :], gts[:, i, :, :, :])).item()
             loss_dict["perceptual"] = perceptual_loss
     else:
         raise NotImplementedError("[!] Always use Optical Flow Warping Loss for stage 3")
 
-    total_loss = flow_loss + gt_loss + perceptual_loss
+    total_loss = flow_loss + l1_loss + perceptual_loss
+    return total_loss, loss_dict
+
+def compute_stage3_loss_streaming(zs, gts, vae, lpips_model, raft_model, loss_mode, scales, chunk_T=1):
+    B, T, Cz, Hz, Wz = zs.shape
+    _, _, Cx, Hx, Wx = gts.shape
+    do_flow = ("flow"       in loss_mode)
+    do_l1   = ("l1"         in loss_mode) 
+    do_lpips= ("perceptual" in loss_mode)
+    total_flow = torch.zeros([], device=zs.device)
+    total_l1   = torch.zeros([], device=zs.device)
+    total_lp   = torch.zeros([], device=zs.device)
+
+    prev_dec = None  # decoded pred at t-1 (for flow)
+
+    for t0 in range(0, T, chunk_T):
+        t1 = min(T, t0 + chunk_T)
+        z_chunk = zs[:, t0:t1, ...].to(torch.float32)          # [1, tc, 4, 64, 64]; fp32 for best optical flow computations
+        gt_chunk = gts[:, t0:t1, ...].to(torch.float32)         # [1, tc, 3, H, W]
+
+        # treat time as batch; keep autocast for speed/VRAM
+        tc = t1 - t0
+        z_flat = z_chunk.reshape(B*tc, Cz, Hz, Wz)
+
+        # Decode
+        dec_flat = vae.decode(z_flat)  # [B*tc,3,H,W], fp32 return
+        dec_chunk = dec_flat.reshape(B, tc, 3, Hx, Wx)            # [1, tc, 3, H, W]
+
+        # Accumulate per-frame losses immediately; free decoded frames ASAP
+        for i in range(tc):
+            t = t0 + i
+            dec_t = dec_chunk[:, i, ...]  # [1,3,H,W]
+            gt_t  = gt_chunk[:, i, ...]   # [1,3,H,W]
+
+            # Perceptual & L1
+            if do_l1:
+                total_l1 = total_l1 + scales.l1 * F.l1_loss(dec_t, gt_t)
+
+            if do_lpips:
+                # LPIPS expects [-1,1] often; adjust if your gts/dec are [0,1].
+                # If both already in [0,1], many codebases still feed as-is.
+                total_lp = total_lp + scales.perceptual * lpips_model(dec_t, gt_t)
+
+            # Flow (use decoded preds; change to GT flow supervision if you prefer)
+            if do_flow and prev_dec is not None:
+                _, flow_fw = raft_model(prev_dec, dec_t, iters=15, test_mode=True)
+                _, flow_bw = raft_model(dec_t, prev_dec, iters=15, test_mode=True)
+                occ, warp_to_prev = detect_occlusion(flow_fw, flow_bw, dec_t)
+                noc = 1.0 - occ
+                diff = (prev_dec - warp_to_prev) * noc
+                # robust average
+                denom = torch.clamp(noc.sum(), min=1.0)
+                total_flow = total_flow + scales.flow * (diff.pow(2).sum() / denom)
+
+            prev_dec = dec_t.detach()  # keep the decoded prior for flow next step; detach to avoid long graph
+
+        # Free chunk tensors ASAP
+        del z_flat, dec_flat, dec_chunk, z_chunk, gt_chunk
+        torch.cuda.empty_cache()
+
+    total_loss = total_flow + total_l1 + total_lp
+    loss_dict = {
+        "flow_loss": float(total_flow.detach().item()),
+        "l1_loss": float(total_l1.detach().item()),
+        "perceptual": float(total_lp.detach().item()),
+    }
     return total_loss, loss_dict
 
 
@@ -205,6 +282,7 @@ def main(args) -> None:
     else:
         print(f"[!] VAE keys NOT used: {vae_unused}")
 
+    vae.eval()
     vae.requires_grad_(False)
 
     temp_stabilizer = TemporalConsistencyLayer().to(device)
@@ -219,9 +297,9 @@ def main(args) -> None:
     #     return dec.float()
 
     class RAFT_args:
-        mixed_precision = False
+        mixed_precision = True
         small = False
-        alternate_corr = False
+        alternate_corr = True # Reduces VRAM significantly in forward pass
         dropout = False
     raft_args = RAFT_args()
 
@@ -244,7 +322,7 @@ def main(args) -> None:
     loader = DataLoader(
         dataset=dataset,
         batch_size=cfg.dataset.train.batch_size,
-        num_workers=cfg.dataset.train.dataloader_num_workers,
+        num_workers=cfg.dataset.train.num_workers,
         shuffle=True,
         drop_last=True,
     )
@@ -262,7 +340,6 @@ def main(args) -> None:
     batch_transform = instantiate_from_config(cfg.dataset.batch_transform)
 
     # Prepare models for training/inference:
-    vae.to(device)
     temp_stabilizer, opt, loader, val_loader = accelerator.prepare(
         temp_stabilizer, opt, loader, val_loader
     )
@@ -304,16 +381,22 @@ def main(args) -> None:
         for batch in loader:
             to(batch, device)
             batch = batch_transform(batch)
-            if cfg.dataset.train.precomputed_latents:
+            if cfg.dataset.train.params.precomputed_latents:
                 zs, gts = batch # B T 4 64 64, B T H W C
-                zs.to(device)
+                gts = gts.permute(0, 1, 4, 2, 3) #B T C H W to match decoder output
+                zs = zs.to(device)
+
                 stable_zs = temp_stabilizer(zs) # B T 4 64 64
-                preds = []
-                for i in range(len(stable_zs.size(1))): # at each time step
-                    pred = vae.decode(stable_zs[:, i, :, :, :])
-                    preds.append(pred.permute(0, 2, 3, 1)) # B C H W -> B H W C
-                preds.stack(preds, dim=1) # B T H W C (same as gts!)
-                loss, loss_dict = compute_stage3_loss(preds, gts)
+
+                
+                # preds = vae.decode(stable_zs.squeeze(0)) # TCHW is treated as BCHW now ;) 
+                # # ^^^ Necessary Optimization for VRAM. Restricts bs to 1 but that is fine since each video has so many frames! --- Still too big
+
+                # preds = preds.unsqueeze(0)
+              
+                with torch.amp.autocast("cuda", dtype=torch.float16):
+                    loss, loss_dict = compute_stage3_loss_streaming(stable_zs, gts, vae, lpips_model, raft_model=raft_model, 
+                                                      loss_mode="l1_flow_perceptual", scales=cfg.loss_scales, chunk_T = 1)
             else:
                 raise NotImplementedError("[!] Precomputing latents saves tons of VRAM! Don't train without pre-computing unless you are FAANG")
 
@@ -375,16 +458,32 @@ def main(args) -> None:
 
             # Log images
             if global_step % cfg.log_image_steps == 0 or global_step == 1:
-                temp_stabilizer.eval()
-                N = 8
-                log_gt, log_pred = gts[:, :N, ...], preds[:, :N, ...]
-                if accelerator.is_local_main_process:
-                    for tag, image in [
-                        ("image/pred", log_pred),
-                        ("image/gt", log_gt),
-                    ]:
-                        writer.add_image(tag, make_grid(image, nrow=4), global_step)
-                temp_stabilizer.train()
+                N = min(8, gts.size(1))
+                log_gt = gts[:, :N, ...].cpu()
+                if accelerator.is_local_main_process: 
+                    with torch.no_grad():
+                        log_zs = stable_zs[:, :N]
+                        log_preds = vae.decode(log_zs.squeeze(0))
+                        log_preds.unsqueeze(0)
+
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v') # Codec for .mp4
+                    fps = 24
+                    frame_size = (512, 512) # Width, Height of your image frames
+
+                    save_dir = os.path.join(cfg.output_dir, "log_images", f"{global_step:07}")
+                    if not os.path.exists(save_dir):
+                        os.makedirs(save_dir)
+
+                    out_gt = cv2.VideoWriter(os.path.join(save_dir, f"gt.mp4"), fourcc, fps, frame_size)
+                    out_pred = cv2.VideoWriter(os.path.join(save_dir, f"pred.mp4"), fourcc, fps, frame_size)
+                    
+                    log_gt_arr = (log_gt * 255.).clamp(0, 255).squeeze(0).permute(0, 2, 3, 1).to(torch.uint8).numpy()
+                    log_pred_arr = (log_preds * 255.).clamp(0, 255).squeeze(0).permute(0, 2, 3, 1).to(torch.uint8).numpy()
+                    for i in range(N):
+                        out_gt.write(log_gt_arr[i])
+                        out_pred.write(log_pred_arr[i])
+                    out_gt.release()
+                    out_pred.release()
 
             # Evaluate model:
             if global_step % cfg.val_every == 0:
@@ -408,15 +507,16 @@ def main(args) -> None:
                     val_zs, val_gts = val_batch # B T 4 64 64, B T H W C
                     with torch.no_grad():
                         stable_zs = temp_stabilizer(val_zs) # B T 4 64 64
-                        val_preds = []
-                        for i in range(len(stable_zs.size(1))): # at each time step
-                            val_pred = vae.decode(stable_zs[:, i, :, :, :])
-                            val_preds.append(val_pred.permute(0, 2, 3, 1)) # B C H W -> B H W C
-                        val_preds.stack(preds, dim=1) # B T H W C (same as gts!)
-                        vloss, vloss_dict = compute_stage3_loss(val_preds, val_gts)
+                        val_pred = vae.decode(stable_zs.squeeze(0))
+                        val_pred = val_pred.unsqueeze(0)
+                        with torch.amp.autocast("cuda", dtype=torch.float16):
+                            vloss, vloss_dict = compute_stage3_loss_streaming(val_pred, val_gts, vae,
+                                                                              lpips_model, raft_model, 
+                                                                              "l1_flow_perceptual", cfg.loss_scales,
+                                                                              chunk_T=1)
                         psnr = 0.
-                        for i in range(len(gts.size(1))):
-                            psnr = psnr + calculate_psnr_pt(val_preds[:, i, ...], val_gts[:, i, ...], crop_border=0).mean().item()
+                        for i in range(gts.size(1)):
+                            psnr = psnr + calculate_psnr_pt(val_pred[:, i, ...], val_gts[:, i, ...], crop_border=0).mean().item()
                         val_psnr.append(psnr)
                         val_loss.append(vloss.item())
                         val_lpips_loss.append(vloss_dict['perceptual'])
@@ -470,7 +570,7 @@ def main(args) -> None:
             writer.add_scalar("train/total_loss_epoch", avg_epoch_loss, global_step)
 
     if accelerator.is_local_main_process:
-        print("done!")
+        print("Done!")
         writer.close()
 
 
