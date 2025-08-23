@@ -286,9 +286,16 @@ def main(args) -> None:
     vae.eval()
     vae.requires_grad_(False)
 
-    temp_stabilizer = TemporalConsistencyLayer().to(device)
-    temp_stabilizer.train().requires_grad_(True)
+    if cfg.resume_training:
+        temp_stabilizer = TemporalConsistencyLayer()
+        ckpt_tstab = torch.load(cfg.resume_ckpt_path, map_location="cpu")
+        temp_stabilizer.load_state_dict(ckpt_tstab)
+        print("\n[+] Loaded temp stabilizer. Resuming training...")
+    else:
+        temp_stabilizer = TemporalConsistencyLayer()
 
+    temp_stabilizer.train().requires_grad_(True)
+    temp_stabilizer.to(device)
     vae.post_quant_conv.to(device)
     vae.decoder.to(device)
     # def decode_latent(z):
@@ -331,7 +338,7 @@ def main(args) -> None:
         dataset=val_dataset,
         batch_size=cfg.dataset.val.batch_size,
         num_workers=cfg.dataset.val.num_workers,
-        drop_last=False,
+        drop_last=True,
     )
 
     batch_transform = instantiate_from_config(cfg.dataset.batch_transform)
