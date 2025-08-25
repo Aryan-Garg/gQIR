@@ -85,7 +85,7 @@ checkpoints_total_limit: None
 resume_from_checkpoint: ~
 log_image_steps: 1000
 log_every: 500
-val_every: 5000
+val_every: 50001
 resume_training: True
 resume_ckpt_path: "/home/argar/apgi/gQVR/experiments_video/checkpoints/tempStab_0005000.pt"
                  

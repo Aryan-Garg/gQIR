@@ -499,7 +499,7 @@ def main(args) -> None:
                         val_pred = vae.decode(stable_zs.squeeze(0))
                         val_pred = val_pred.unsqueeze(0)
                         with torch.amp.autocast("cuda", dtype=torch.float16):
-                            vloss, vloss_dict = compute_stage3_loss_streaming(val_pred, val_gts, vae,
+                            vloss, vloss_dict = compute_stage3_loss_streaming(stable_zs, val_gts, vae,
                                                                               lpips_model, raft_model, 
                                                                               "l1_flow_perceptual", cfg.loss_scales,
                                                                               chunk_T=1)

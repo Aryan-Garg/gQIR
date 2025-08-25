@@ -169,8 +169,10 @@ def save_all_video_Gprocessed_latents_to_disk(ds_txt_file):
                 video_path = p[0]
                 video_paths.append(HARDDISK_DIR + video_path[2:])
 
-    for video_path in tqdm(video_paths):
+    for video_path in tqdm(video_paths[::-1]):
         for img_name in sorted(os.listdir(video_path)):
+            if os.path.exists(os.path.join(video_path, f"{img_name[:-4]}.pt")) or img_name.endswith(".pt"):
+                continue
             image_path = os.path.join(video_path, img_name)
             # print(f"Loading {image_path}")
             gt_image = Image.open(image_path).convert("RGB")

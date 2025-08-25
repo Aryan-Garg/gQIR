@@ -49,10 +49,12 @@ Keep changing the main function for now (make it arg passing only during deploym
 **Precomputing latents:**
 
 > conda activate hypir && cd apgi/gQVR
-> python3 infer_sd2GAN_stage2.py --config configs/inference/eval_sd2GAN.yaml --device "cuda:7" --ds_txt dataset_txt_files/video_dataset_txt_files/combined_part07.txt
+> python3 infer_sd2GAN_stage2.py --config configs/inference/eval_sd2GAN.yaml --device "cuda:0" --ds_txt dataset_txt_files/video_dataset_txt_files/combined_part00.txt
 
 **Training Lifting Stage:**
-> CUDA_VISIBLE_DEVICES="1,2,3,4,5,6" accelerate launch train_3Dtemp_stabilization.py --config configs/train/train_sd2gan_video.yaml
+
+> conda activate hypir && cd apgi/gQVR
+> CUDA_VISIBLE_DEVICES="1,2,3,4,5,6,7,8,9,10,11,12,13,14,15" accelerate launch train_3Dtemp_stabilization.py --config configs/train/train_sd2gan_video.yaml
 
 Currently the brightness scale/factor (proportional to PPP) is set to 1.0 for all simulations
 
