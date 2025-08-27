@@ -1,10 +1,11 @@
 import os
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+# os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 from argparse import ArgumentParser
 import warnings
 
 from omegaconf import OmegaConf
 import torch
+import torch.nn as nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -235,7 +236,7 @@ def compute_stage3_loss_streaming(zs, gts, vae, lpips_model, raft_model, loss_mo
 
         # Free chunk tensors ASAP
         del z_flat, dec_flat, dec_chunk, z_chunk, gt_chunk
-        torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
 
     total_loss = total_flow + total_l1 + total_lp
     loss_dict = {
@@ -333,19 +334,22 @@ def main(args) -> None:
         num_workers=cfg.dataset.train.num_workers,
         drop_last=True,
     )
-    val_dataset = instantiate_from_config(cfg.dataset.val)
-    val_loader = DataLoader(
-        dataset=val_dataset,
-        batch_size=cfg.dataset.val.batch_size,
-        num_workers=cfg.dataset.val.num_workers,
-        drop_last=True,
-    )
+    # val_dataset = instantiate_from_config(cfg.dataset.val)
+    # val_loader = DataLoader(
+    #     dataset=val_dataset,
+    #     batch_size=cfg.dataset.val.batch_size,
+    #     num_workers=cfg.dataset.val.num_workers,
+    #     drop_last=True,
+    # )
 
     batch_transform = instantiate_from_config(cfg.dataset.batch_transform)
 
     # Prepare models for training/inference:
-    temp_stabilizer, opt, loader, val_loader = accelerator.prepare(
-        temp_stabilizer, opt, loader, val_loader
+    # temp_stabilizer, opt, loader, val_loader = accelerator.prepare(
+    #     temp_stabilizer, opt, loader, val_loader
+    # )
+    temp_stabilizer, opt, loader = accelerator.prepare(
+        temp_stabilizer, opt, loader
     )
     temp_stabilizer = accelerator.unwrap_model(temp_stabilizer)
 
@@ -475,72 +479,72 @@ def main(args) -> None:
                         Image.fromarray(log_pred_arr[i]).save(os.path.join(save_dir, f"pred_frame_{i}.png"))
 
             # Evaluate model:
-            if global_step % cfg.val_every == 0:
-                temp_stabilizer.eval() 
-                # NOTE: eval() only halts BN stat accumulation & disables dropout. grad computation can still happen! Use with torch.no_grad() around model.
+            # if global_step % cfg.val_every == 0 or global_step == 1:
+            #     temp_stabilizer.eval() 
+            #     # NOTE: eval() only halts BN stat accumulation & disables dropout. grad computation can still happen! Use with torch.no_grad() around model.
 
-                val_loss = []
-                val_lpips_loss = []
-                val_psnr = []
-                val_pbar = tqdm(
-                    iterable=None,
-                    disable=not accelerator.is_local_main_process,
-                    unit="batch",
-                    leave=False,
-                    desc="Validation",
-                )
-                for val_batch in val_loader:
-                    to(val_batch, device)
-                    val_batch = batch_transform(val_batch)
-                    val_zs = val_batch["latents"] # B T 4 64 64
-                    val_gts = val_batch["gts"]
-                    with torch.no_grad():
-                        stable_zs = temp_stabilizer(val_zs) # B T 4 64 64
-                        val_pred = vae.decode(stable_zs.squeeze(0))
-                        val_pred = val_pred.unsqueeze(0)
-                        with torch.amp.autocast("cuda", dtype=torch.float16):
-                            vloss, vloss_dict = compute_stage3_loss_streaming(stable_zs, val_gts, vae,
-                                                                              lpips_model, raft_model, 
-                                                                              "l1_flow_perceptual", cfg.loss_scales,
-                                                                              chunk_T=1)
-                        psnr = 0.
-                        for i in range(val_gts.size(1)):
-                            psnr = psnr + calculate_psnr_pt(val_pred[:, i, ...], val_gts[:, i, ...], crop_border=0).mean().item()
-                        val_psnr.append(psnr)
-                        val_loss.append(vloss.item())
-                        val_lpips_loss.append(vloss_dict['perceptual'])
-                    val_pbar.update(1)
+            #     val_loss = []
+            #     val_lpips_loss = []
+            #     val_psnr = []
+            #     val_pbar = tqdm(
+            #         iterable=None,
+            #         disable=not accelerator.is_local_main_process,
+            #         unit="batch",
+            #         leave=False,
+            #         desc="Validation",
+            #     )
+            #     for val_batch in val_loader:
+            #         to(val_batch, device)
+            #         val_batch = batch_transform(val_batch)
+            #         val_zs = val_batch["latents"] # B T 4 64 64
+            #         val_gts = val_batch["gts"]
+            #         with torch.no_grad():
+            #             stable_zs = temp_stabilizer(val_zs) # B T 4 64 64
+            #             val_pred = vae.decode(stable_zs.squeeze(0))
+            #             val_pred = val_pred.unsqueeze(0)
+            #             with torch.amp.autocast("cuda", dtype=torch.float16):
+            #                 vloss, vloss_dict = compute_stage3_loss_streaming(stable_zs, val_gts, vae,
+            #                                                                   lpips_model, raft_model, 
+            #                                                                   "l1_flow_perceptual", cfg.loss_scales,
+            #                                                                   chunk_T=1)
+            #             psnr = 0.
+            #             for i in range(val_gts.size(1)):
+            #                 psnr = psnr + calculate_psnr_pt(val_pred[:, i, ...], val_gts[:, i, ...], crop_border=0).mean().item()
+            #             val_psnr.append(psnr)
+            #             val_loss.append(vloss.item())
+            #             val_lpips_loss.append(vloss_dict['perceptual'])
+            #         val_pbar.update(1)
 
-                val_pbar.close()
-                avg_val_loss = (
-                    accelerator.gather(
-                        torch.tensor(val_loss, device=device).unsqueeze(0)
-                    )
-                    .mean()
-                    .item()
-                )
-                avg_val_lpips = (
-                    accelerator.gather(
-                        torch.tensor(val_lpips_loss, device=device).unsqueeze(0)
-                    )
-                    .mean()
-                    .item()
-                )
-                avg_val_psnr = (
-                    accelerator.gather(
-                        torch.tensor(val_psnr, device=device).unsqueeze(0)
-                    )
-                    .mean()
-                    .item()
-                )
-                if accelerator.is_local_main_process:
-                    for tag, val in [
-                        ("val/total_loss", avg_val_loss),
-                        ("val/lpips", avg_val_lpips),
-                        ("val/psnr", avg_val_psnr),
-                    ]:
-                        writer.add_scalar(tag, val, global_step)
-                temp_stabilizer.train()
+            #     val_pbar.close()
+            #     avg_val_loss = (
+            #         accelerator.gather(
+            #             torch.tensor(val_loss, device=device).unsqueeze(0)
+            #         )
+            #         .mean()
+            #         .item()
+            #     )
+            #     avg_val_lpips = (
+            #         accelerator.gather(
+            #             torch.tensor(val_lpips_loss, device=device).unsqueeze(0)
+            #         )
+            #         .mean()
+            #         .item()
+            #     )
+            #     avg_val_psnr = (
+            #         accelerator.gather(
+            #             torch.tensor(val_psnr, device=device).unsqueeze(0)
+            #         )
+            #         .mean()
+            #         .item()
+            #     )
+            #     if accelerator.is_local_main_process:
+            #         for tag, val in [
+            #             ("val/total_loss", avg_val_loss),
+            #             ("val/lpips", avg_val_lpips),
+            #             ("val/psnr", avg_val_psnr),
+            #         ]:
+            #             writer.add_scalar(tag, val, global_step)
+            #     temp_stabilizer.train()
 
             accelerator.wait_for_everyone()
 
@@ -565,6 +569,8 @@ def main(args) -> None:
         print("Done!")
         writer.close()
         pbar.close()
+
+    accelerator.end_training()
 
 
 if __name__ == "__main__":
