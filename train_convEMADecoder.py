@@ -156,31 +156,6 @@ def compute_flow_loss(pred_frames, gt_frames, raft_model):
     return warping_error 
 
 
-def compute_stage3_loss(preds, gts, lpips_model, raft_model, loss_mode, scales):
-    flow_loss = 0.
-    l1_loss = 0.
-    perceptual_loss = 0.
-    loss_dict = {"flow": flow_loss, "perceptual": perceptual_loss, "L1_loss": l1_loss}
-    if "flow" in loss_mode:
-        flow_loss = scales.flow * compute_flow_loss(preds, gts, raft_model)
-        loss_dict["flow"] = flow_loss.item()
-
-        if "gt" in loss_mode:
-            l1_loss = scales.l1 * F.l1_loss(preds, gts, reduction="sum")
-            loss_dict["L1_loss"] = l1_loss.item()
-
-        if "perceptual" in loss_mode:
-            perceptual_loss = 0.
-            for i in range(gts.size(1)):
-                perceptual_loss = perceptual_loss + (scales.perceptual * lpips_model(preds[:, i, :, :, :], gts[:, i, :, :, :])).item()
-            loss_dict["perceptual"] = perceptual_loss
-    else:
-        raise NotImplementedError("[!] Always use Optical Flow Warping Loss for stage 3")
-
-    total_loss = flow_loss + l1_loss + perceptual_loss
-    return total_loss, loss_dict
-
-
 def compute_stage3_loss_streaming(zs, gts, vae, lpips_model, raft_model, loss_mode, scales, chunk_T=1):
     B, T, Cz, Hz, Wz = zs.shape
     _, _, Cx, Hx, Wx = gts.shape
@@ -192,6 +167,8 @@ def compute_stage3_loss_streaming(zs, gts, vae, lpips_model, raft_model, loss_mo
     total_l1   = torch.zeros([], device=zs.device)
     total_lp   = torch.zeros([], device=zs.device)
     total_rmse = torch.zeros([], device=zs.device)
+    total_loss = torch.zeros([], device=zs.device)
+
     prev_dec = None  # decoded pred at t-1 (for flow)
 
     for t0 in range(0, T, chunk_T):
@@ -203,14 +180,10 @@ def compute_stage3_loss_streaming(zs, gts, vae, lpips_model, raft_model, loss_mo
         tc = t1 - t0
         z_flat = z_chunk.reshape(B*tc, Cz, Hz, Wz)
 
-        # Decode
-        dec_flat = vae.decode(z_flat)  # [B*tc,3,H,W], fp32 return
-        dec_chunk = dec_flat.reshape(B, tc, 3, Hx, Wx)            # [1, tc, 3, H, W]
-
         # Accumulate per-frame losses immediately; free decoded frames ASAP
         for i in range(tc):
             t = t0 + i
-            dec_t = dec_chunk[:, i, ...]  # [1,3,H,W]
+            dec_t = vae.decode(z_chunk[:, i, ...])
             gt_t  = gt_chunk[:, i, ...]   # [1,3,H,W]
 
             # Perceptual & L1
@@ -234,12 +207,12 @@ def compute_stage3_loss_streaming(zs, gts, vae, lpips_model, raft_model, loss_mo
                 total_flow = total_flow + scales.flow * (diff.pow(2).sum() / denom)
             
             if do_unified_rmse and prev_dec is not None:
-                total_rmse = total_rmse + (dec_t - prev_dec).pow(2).sum().sqrt()
+                total_rmse = total_rmse + (scales.unified * ((dec_t - prev_dec).pow(2).sum().sqrt()))
 
             prev_dec = dec_t.detach()  # keep the decoded prior for flow next step; detach to avoid long graph
 
         # Free chunk tensors ASAP
-        del z_flat, dec_flat, dec_chunk, z_chunk, gt_chunk
+        del z_flat, z_chunk, gt_chunk
         # torch.cuda.empty_cache()
     if do_flow:
         total_loss = total_loss + total_flow
@@ -267,6 +240,7 @@ def reset_decoder_memory(decoder: ConvEMA_Decoder):
     decoder.ema_mem_convout_unstab = None
 
 
+
 def main(args) -> None:
     # Setup accelerator:
     accelerator = Accelerator(split_batches=True)
@@ -283,6 +257,7 @@ def main(args) -> None:
 
 
     vae = ConvEMA_AutoencoderKL(cfg.model.vae_cfg.ddconfig, cfg.model.vae_cfg.embed_dim)
+
     # Load quanta VAE
     daVAE = torch.load(cfg.qvae_path, map_location="cpu")
     init_vae = {}
@@ -290,12 +265,13 @@ def main(args) -> None:
     scratch_vae = vae.state_dict()
     for key in scratch_vae:
         if key not in daVAE:
-            print(f"[!] {key} missing in daVAE")
+            if "ema" not in key:
+                print(f"[!] {key} missing in daVAE")
             continue
         # print(f"Found {key} in daVAE. Loading...")
         init_vae[key] = daVAE[key].clone()
         vae_used.add(key)
-    vae.load_state_dict(init_vae, strict=True)
+    vae.load_state_dict(init_vae, strict=False)
     # vae.to(device=device)
     vae_unused = set(daVAE.keys()) - vae_used
 
@@ -304,14 +280,20 @@ def main(args) -> None:
     else:
         print(f"[!] VAE keys NOT used: {vae_unused}")
 
-    vae.requires_grad_(False)
+    
     for name, param in vae.decoder.named_parameters():
         if "ema" in name:
+            # print(f"[+] Setting {name}'s params to requires_grad_(True)")
             param.requires_grad_(True)
+        else:
+            param.requires_grad_(False)
 
+    vae.decoder.detach_memory = True # don't need EMA gradients
+    vae.encoder.requires_grad_(False)
 
+    
     temp_stabilizer = TemporalConsistencyLayer()
-    ckpt_tstab = torch.load(cfg.resume_ckpt_path, map_location="cpu")
+    ckpt_tstab = torch.load(cfg.latent_temp_stab_ckpt, map_location="cpu")
     temp_stabilizer.load_state_dict(ckpt_tstab)
     print("\n[+] Loaded temp stabilizer.")
     temp_stabilizer.eval().requires_grad_(False).to(device)
@@ -342,8 +324,8 @@ def main(args) -> None:
     raft_model.eval().requires_grad_(False).to(device)
 
     # Setup optimizer:
-    opt = torch.optim.AdamW(temp_stabilizer.parameters(), 
-        lr=cfg.lr_temp_stabilizer, 
+    opt = torch.optim.AdamW(vae.decoder.parameters(), 
+        lr=cfg.lr_conv_ema_decoder, 
         **cfg.opt_kwargs)
 
     # Setup data:
@@ -354,24 +336,13 @@ def main(args) -> None:
         num_workers=cfg.dataset.train.num_workers,
         drop_last=True,
     )
-    # val_dataset = instantiate_from_config(cfg.dataset.val)
-    # val_loader = DataLoader(
-    #     dataset=val_dataset,
-    #     batch_size=cfg.dataset.val.batch_size,
-    #     num_workers=cfg.dataset.val.num_workers,
-    #     drop_last=True,
-    # )
 
     batch_transform = instantiate_from_config(cfg.dataset.batch_transform)
 
-    # Prepare models for training/inference:
-    # temp_stabilizer, opt, loader, val_loader = accelerator.prepare(
-    #     temp_stabilizer, opt, loader, val_loader
-    # )
-    temp_stabilizer, opt, loader = accelerator.prepare(
-        temp_stabilizer, opt, loader
+    vae.decoder, opt, loader = accelerator.prepare(
+        vae.decoder, opt, loader
     )
-    temp_stabilizer = accelerator.unwrap_model(temp_stabilizer)
+    vae.decoder = accelerator.unwrap_model(vae.decoder)
 
     # Variables for monitoring/logging purposes:
     global_step = 0
@@ -379,10 +350,10 @@ def main(args) -> None:
     step_l1_loss = []
     step_perceptual_loss = []
     step_flow_loss = []
+    step_unified_loss = []
+
     epoch = 0
     epoch_loss = []
-
-   
     with warnings.catch_warnings():
         # avoid warnings from lpips internal
         warnings.simplefilter("ignore")
@@ -421,6 +392,7 @@ def main(args) -> None:
                 with torch.amp.autocast("cuda", dtype=torch.float16):
                     loss, loss_dict = compute_stage3_loss_streaming(stable_zs, gts, vae, lpips_model, raft_model=raft_model, 
                                                       loss_mode="l1_flow_perceptual", scales=cfg.loss_scales, chunk_T = 1)
+                reset_decoder_memory(vae.decoder)
             else:
                 raise NotImplementedError("[!] Precomputing latents saves tons of VRAM! Don't train without pre-computing unless you are FAANG")
 
@@ -433,6 +405,7 @@ def main(args) -> None:
             step_flow_loss.append(loss_dict["flow_loss"])
             step_l1_loss.append(loss_dict["l1_loss"])
             step_perceptual_loss.append(loss_dict["perceptual"])
+            step_unified_loss.append(loss_dict["unified_rmse"])
             epoch_loss.append(loss.item())
 
             # Log loss values:
@@ -459,21 +432,29 @@ def main(args) -> None:
                     .mean()
                     .item()
                 )
-
+                avg_unified_loss = (
+                    accelerator.gather(
+                        torch.tensor(step_unified_loss, device=device).unsqueeze(0)
+                    )
+                    .mean()
+                    .item()
+                )
                 step_flow_loss.clear()
                 step_l1_loss.clear()
                 step_perceptual_loss.clear()
+                step_unified_loss.clear()
 
                 if accelerator.is_local_main_process:
                     writer.add_scalar("train/flow_loss_step", avg_flow_loss, global_step)
                     writer.add_scalar("train/l1_loss_step", avg_l1_loss, global_step)
                     writer.add_scalar("train/perceptual_loss_step", avg_perceptual_loss, global_step)
+                    writer.add_scalar("train/unified_loss_step", avg_unified_loss, global_step)
 
             # Save checkpoint:
             if global_step % cfg.checkpointing_steps == 0:
                 if accelerator.is_local_main_process:
-                    checkpoint = temp_stabilizer.state_dict()
-                    ckpt_path = f"{ckpt_dir}/tempStab_{global_step:07d}.pt"
+                    checkpoint = vae.decoder.state_dict()
+                    ckpt_path = f"{ckpt_dir}/ConvEMA_Decoder_{global_step:07d}.pt"
                     torch.save(checkpoint, ckpt_path)
 
             # Log images
@@ -497,74 +478,6 @@ def main(args) -> None:
                     for i in range(N):
                         Image.fromarray(log_gt_arr[i]).save(os.path.join(save_dir, f"gt_frame_{i}.png"))
                         Image.fromarray(log_pred_arr[i]).save(os.path.join(save_dir, f"pred_frame_{i}.png"))
-
-            # Evaluate model:
-            # if global_step % cfg.val_every == 0 or global_step == 1:
-            #     temp_stabilizer.eval() 
-            #     # NOTE: eval() only halts BN stat accumulation & disables dropout. grad computation can still happen! Use with torch.no_grad() around model.
-
-            #     val_loss = []
-            #     val_lpips_loss = []
-            #     val_psnr = []
-            #     val_pbar = tqdm(
-            #         iterable=None,
-            #         disable=not accelerator.is_local_main_process,
-            #         unit="batch",
-            #         leave=False,
-            #         desc="Validation",
-            #     )
-            #     for val_batch in val_loader:
-            #         to(val_batch, device)
-            #         val_batch = batch_transform(val_batch)
-            #         val_zs = val_batch["latents"] # B T 4 64 64
-            #         val_gts = val_batch["gts"]
-            #         with torch.no_grad():
-            #             stable_zs = temp_stabilizer(val_zs) # B T 4 64 64
-            #             val_pred = vae.decode(stable_zs.squeeze(0))
-            #             val_pred = val_pred.unsqueeze(0)
-            #             with torch.amp.autocast("cuda", dtype=torch.float16):
-            #                 vloss, vloss_dict = compute_stage3_loss_streaming(stable_zs, val_gts, vae,
-            #                                                                   lpips_model, raft_model, 
-            #                                                                   "l1_flow_perceptual", cfg.loss_scales,
-            #                                                                   chunk_T=1)
-            #             psnr = 0.
-            #             for i in range(val_gts.size(1)):
-            #                 psnr = psnr + calculate_psnr_pt(val_pred[:, i, ...], val_gts[:, i, ...], crop_border=0).mean().item()
-            #             val_psnr.append(psnr)
-            #             val_loss.append(vloss.item())
-            #             val_lpips_loss.append(vloss_dict['perceptual'])
-            #         val_pbar.update(1)
-
-            #     val_pbar.close()
-            #     avg_val_loss = (
-            #         accelerator.gather(
-            #             torch.tensor(val_loss, device=device).unsqueeze(0)
-            #         )
-            #         .mean()
-            #         .item()
-            #     )
-            #     avg_val_lpips = (
-            #         accelerator.gather(
-            #             torch.tensor(val_lpips_loss, device=device).unsqueeze(0)
-            #         )
-            #         .mean()
-            #         .item()
-            #     )
-            #     avg_val_psnr = (
-            #         accelerator.gather(
-            #             torch.tensor(val_psnr, device=device).unsqueeze(0)
-            #         )
-            #         .mean()
-            #         .item()
-            #     )
-            #     if accelerator.is_local_main_process:
-            #         for tag, val in [
-            #             ("val/total_loss", avg_val_loss),
-            #             ("val/lpips", avg_val_lpips),
-            #             ("val/psnr", avg_val_psnr),
-            #         ]:
-            #             writer.add_scalar(tag, val, global_step)
-            #     temp_stabilizer.train()
 
             accelerator.wait_for_everyone()
 
