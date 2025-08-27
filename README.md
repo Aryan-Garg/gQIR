@@ -40,21 +40,27 @@ Keep changing the main function for now (make it arg passing only during deploym
 #### Stage 1 - SPAD-CMOS Aligned VAE:
 > accelerate launch train_daEncoder.py --config configs/train/train_daEncoder.yaml
 
-#### Stage 2 - Adversarial Training with Diffusion Initialization:
+#### Stage 2 - Latent Space Enhancement - Adversarial Training with Diffusion Initialization:
 
 > python3 train_sd2GAN.py --config configs/train/train_sd2gan.yaml
 
-#### Stage 3 - Video Stabilization
+#### Stage 3 - Image Prior Lifting and Stabilization
 
 **Precomputing latents:**
 
 > conda activate hypir && cd apgi/gQVR
 > python3 infer_sd2GAN_stage2.py --config configs/inference/eval_sd2GAN.yaml --device "cuda:0" --ds_txt dataset_txt_files/video_dataset_txt_files/combined_part00.txt
 
-**Training Lifting Stage:**
+**1. Training Latent Space 3D Stabilizer:**
 
 > conda activate hypir && cd apgi/gQVR
-> CUDA_VISIBLE_DEVICES="1,2,3,4,5,6,7,8,9,10,11,12,13,14,15" accelerate launch train_3Dtemp_stabilization.py --config configs/train/train_sd2gan_video.yaml
+> accelerate launch train_3Dtemp_stabilization.py --config configs/train/train_sd2gan_video.yaml
+
+**2. Training ConvEMA Decoder:**
+> conda activate hypir && cd apgi/gQVR
+> accelerate launch train_convEMADecoder.py --config configs/train/train_convEMA_decoder_stage3.yaml
+
+---
 
 Currently the brightness scale/factor (proportional to PPP) is set to 1.0 for all simulations
 
