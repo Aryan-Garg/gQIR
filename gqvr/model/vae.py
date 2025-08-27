@@ -559,12 +559,249 @@ class Decoder(nn.Module):
         return h
 
 
+class ConvEMA_Decoder(nn.Module):
+    def __init__(
+        self,
+        *,
+        ch,
+        out_ch,
+        ch_mult=(1, 2, 4, 8),
+        num_res_blocks,
+        attn_resolutions,
+        dropout=0.0,
+        resamp_with_conv=True,
+        in_channels,
+        resolution,
+        z_channels,
+        give_pre_end=False,
+        tanh_out=False,
+        use_linear_attn=False,
+        ema_hidden_channels=64,
+        ema_hidden_layers=2,
+        ema_conv_kernel=3,
+        ema_fusion_kernel=1,
+        ema_skip_connection=True,
+        detach_memory=True,
+        **ignorekwargs,
+    ):
+        super().__init__()
+        # Attention type
+        if Config.attn_mode == AttnMode.SDP:
+            attn_type = "sdp"
+        elif Config.attn_mode == AttnMode.XFORMERS:
+            attn_type = "xformers"
+        else:
+            attn_type = "vanilla"
+        if use_linear_attn:
+            attn_type = "linear"
+
+        self.ch = ch
+        self.temb_ch = 0
+        self.num_resolutions = len(ch_mult)
+        self.num_res_blocks = num_res_blocks
+        self.resolution = resolution
+        self.in_channels = in_channels
+        self.give_pre_end = give_pre_end
+        self.tanh_out = tanh_out
+        self.detach_memory = detach_memory
+
+        in_ch_mult = (1,) + tuple(ch_mult)
+        block_in = ch * ch_mult[self.num_resolutions - 1]
+        curr_res = resolution // 2 ** (self.num_resolutions - 1)
+        self.z_shape = (1, z_channels, curr_res, curr_res)
+
+        # z → block_in
+        self.conv_in = torch.nn.Conv2d(z_channels, block_in, 3, 1, 1)
+
+        # middle
+        self.mid = nn.Module()
+        self.mid.block_1 = ResnetBlock(block_in, block_in, self.temb_ch, dropout)
+        self.mid.attn_1 = make_attn(block_in, attn_type=attn_type)
+        self.mid.block_2 = ResnetBlock(block_in, block_in, self.temb_ch, dropout)
+
+        # --- EMA memories ---
+        self.ema_mem_block1_stab = None
+        self.ema_mem_block1_unstab = None
+        self.ema_mem_block2_stab = None
+        self.ema_mem_block2_unstab = None
+        self.ema_mem_convout_stab = None
+        self.ema_mem_convout_unstab = None
+
+        # --- EMA parameters per layer ---
+        def make_ema_params():
+            weights = nn.ParameterList([nn.UninitializedParameter() for _ in range(ema_hidden_layers + 2)])
+            biases = nn.ParameterList([nn.UninitializedParameter() for _ in range(ema_hidden_layers + 2)])
+            activations = nn.ModuleList([nn.LeakyReLU() for _ in range(ema_hidden_layers + 1)])
+            return weights, biases, activations
+
+        self.ema1_weights, self.ema1_biases, self.ema1_activations = make_ema_params()
+        self.ema2_weights, self.ema2_biases, self.ema2_activations = make_ema_params()
+        self.ema3_weights, self.ema3_biases, self.ema3_activations = make_ema_params()
+
+        self.ema_hidden_channels = ema_hidden_channels
+        self.ema_hidden_layers = ema_hidden_layers
+        self.ema_conv_kernel = ema_conv_kernel
+        self.ema_fusion_kernel = ema_fusion_kernel
+        self.ema_skip_connection = ema_skip_connection
+
+        # upsampling
+        self.up = nn.ModuleList()
+        for i_level in reversed(range(self.num_resolutions)):
+            block = nn.ModuleList()
+            attn = nn.ModuleList()
+            block_out = ch * ch_mult[i_level]
+            for i_block in range(self.num_res_blocks + 1):
+                block.append(ResnetBlock(block_in, block_out, self.temb_ch, dropout))
+                block_in = block_out
+                if curr_res in attn_resolutions:
+                    attn.append(make_attn(block_in, attn_type=attn_type))
+            up = nn.Module()
+            up.block = block
+            up.attn = attn
+            if i_level != 0:
+                up.upsample = Upsample(block_in, resamp_with_conv)
+                curr_res *= 2
+            self.up.insert(0, up)
+
+        # end
+        self.norm_out = Normalize(block_in)
+        self.conv_out = torch.nn.Conv2d(block_in, out_ch, 3, 1, 1)
+
+    def _conv_ema(self, h, mem_stab, mem_unstab, weights, biases, activations):
+        unsqueeze = h.ndim == 3
+        if unsqueeze:
+            h = h.unsqueeze(1)
+
+        if mem_unstab is not None:
+            q = torch.cat([h, mem_stab, mem_unstab], dim=1)
+
+            if torch.nn.parameter.is_lazy(weights[0]):
+                in_ch = q.shape[1]
+                hidden_ch = self.ema_hidden_channels
+                for i in range(self.ema_hidden_layers):
+                    weights[i].materialize((hidden_ch, hidden_ch, self.ema_conv_kernel, self.ema_conv_kernel))
+                    biases[i].materialize((hidden_ch,))
+                out_ch = h.shape[1] * (self.ema_fusion_kernel ** 2)
+                weights[-1].materialize((out_ch, hidden_ch, self.ema_conv_kernel, self.ema_conv_kernel))
+                biases[-1].materialize((out_ch,))
+                for w in weights[:-1]:
+                    nn.init.xavier_uniform_(w, nn.init.calculate_gain("leaky_relu"))
+                nn.init.xavier_uniform_(weights[-1], nn.init.calculate_gain("linear"))
+                for b in biases[:-1]:
+                    nn.init.zeros_(b)
+                nn.init.constant_(biases[-1], -4.0)
+
+            q = nn.functional.conv2d(q, weights[0], biases[0], padding="same")
+            q = activations[0](q)
+            skip = q
+            for i in range(self.ema_hidden_layers):
+                q = nn.functional.conv2d(q, weights[i+1], biases[i+1], padding="same")
+                q = activations[i+1](q)
+            if self.ema_skip_connection:
+                q = q + skip
+
+            shape = h.shape
+            head = nn.functional.conv2d(q, weights[-1], biases[-1], padding="same")
+            head = rearrange(head, "b (c p) h w -> b c p (h w)", c=shape[1])
+            eta = torch.cat([head, torch.zeros_like(head[:, :, :1])], dim=2)
+            eta = eta.softmax(dim=2)
+            mem = nn.functional.unfold(mem_stab, self.ema_fusion_kernel, padding=self.ema_fusion_kernel // 2)
+            mem = rearrange(mem, "b (c p) hw -> b c p hw", c=shape[1])
+            h_flat = rearrange(h, "b c h w -> b c (h w)")
+            h = (mem * eta[:, :, :-1]).sum(dim=2) + eta[:, :, -1] * h_flat
+            h = h.view(shape)
+
+        mem_stab = h.clone()
+        mem_unstab = h.clone()
+        if self.detach_memory:
+            mem_stab = mem_stab.detach()
+            mem_unstab = mem_unstab.detach()
+
+        if unsqueeze:
+            h = h.squeeze(1)
+
+        return h, mem_stab, mem_unstab
+
+    def forward(self, z):
+        h = self.conv_in(z)
+
+        # --- mid.block_1 + EMA ---
+        h = self.mid.block_1(h, None)
+        h = self.mid.attn_1(h)
+        h, self.ema_mem_block1_stab, self.ema_mem_block1_unstab = self._conv_ema(
+            h, self.ema_mem_block1_stab, self.ema_mem_block1_unstab,
+            self.ema1_weights, self.ema1_biases, self.ema1_activations
+        )
+
+        # --- mid.block_2 + EMA ---
+        h = self.mid.block_2(h, None)
+        h, self.ema_mem_block2_stab, self.ema_mem_block2_unstab = self._conv_ema(
+            h, self.ema_mem_block2_stab, self.ema_mem_block2_unstab,
+            self.ema2_weights, self.ema2_biases, self.ema2_activations
+        )
+
+        # --- upsampling ---
+        for i_level in reversed(range(self.num_resolutions)):
+            for i_block in range(self.num_res_blocks + 1):
+                h = self.up[i_level].block[i_block](h, None)
+                if len(self.up[i_level].attn) > 0:
+                    h = self.up[i_level].attn[i_block](h)
+            if i_level != 0:
+                h = self.up[i_level].upsample(h)
+
+        # --- conv_out + EMA ---
+        h = self.norm_out(h)
+        h = nonlinearity(h)
+        h = self.conv_out(h)
+        h, self.ema_mem_convout_stab, self.ema_mem_convout_unstab = self._conv_ema(
+            h, self.ema_mem_convout_stab, self.ema_mem_convout_unstab,
+            self.ema3_weights, self.ema3_biases, self.ema3_activations
+        )
+
+        if self.tanh_out:
+            h = torch.tanh(h)
+
+        return h
+    
+
 class AutoencoderKL(nn.Module):
 
     def __init__(self, ddconfig, embed_dim):
         super().__init__()
         self.encoder = Encoder(**ddconfig)
         self.decoder = Decoder(**ddconfig)
+        assert ddconfig["double_z"]
+        self.quant_conv = torch.nn.Conv2d(2 * ddconfig["z_channels"], 2 * embed_dim, 1)
+        self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
+        self.embed_dim = embed_dim
+
+    def encode(self, x):
+        h = self.encoder(x)
+        moments = self.quant_conv(h)
+        posterior = DiagonalGaussianDistribution(moments)
+        return posterior
+
+    def decode(self, z):
+        z = self.post_quant_conv(z)
+        dec = self.decoder(z)
+        return dec
+
+    def forward(self, input, sample_posterior=True):
+        posterior = self.encode(input)
+        if sample_posterior:
+            z = posterior.sample()
+        else:
+            z = posterior.mode()
+        dec = self.decode(z)
+        return dec, posterior
+
+
+class ConvEMA_AutoencoderKL(nn.Module):
+
+    def __init__(self, ddconfig, embed_dim):
+        super().__init__()
+        self.encoder = Encoder(**ddconfig)
+        self.decoder = ConvEMA_Decoder(**ddconfig)
         assert ddconfig["double_z"]
         self.quant_conv = torch.nn.Conv2d(2 * ddconfig["z_channels"], 2 * embed_dim, 1)
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
