@@ -59,7 +59,7 @@ class TemporalConsistencyLayer(nn.Module):
         self.weight_dtype = torch.float32                       # Yes, fixed & hardcoded at max precision since these are <3k params! Relax!
         self.local_attention = LocalCubeletAttention()          # 3D conv attention (B, C, T, H, W)
         self.temporal_attention = TemporalLocalAttention()      # Temporal only (B, T, C)
-        self.gamma = nn.Parameter(torch.zeros(1, 1, 1, 1, 1))   # Learnable residual scale; start at 0!
+        self.gamma = nn.Parameter(torch.full((1, 1, 1, 1, 1), 0.1))   # Learnable residual scale; start at 0!
 
     def forward(self, x):  # x shape: [B, T, C, H, W]
         # Permute to (B, C, T, H, W) for 3D conv
@@ -77,7 +77,7 @@ class TemporalConsistencyLayer(nn.Module):
         x_temporal = x_temporal.unsqueeze(-1).unsqueeze(-1)  # [B, T, C, 1, 1]
 
         # Multiply original x by temporal attention weights
-        x = x + (self.gamma * x_temporal)
+        x = x * (1 + self.gamma * x_temporal)
 
         return x
 

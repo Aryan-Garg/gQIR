@@ -78,7 +78,6 @@ class HookableModule(nn.Module, ABC):
         return self.__class__.__name__
     
 
-
 class Stabilizer(HookableModule, ABC):
     def __init__(self, hook_target: str = "output") -> None:
         super().__init__(hook_target=hook_target)
@@ -117,6 +116,7 @@ class Stabilizer(HookableModule, ABC):
     @abstractmethod
     def stabilize(self, z: torch.Tensor) -> torch.Tensor:
         pass
+
 
 class ControlledConvEMAStabilizer(Stabilizer):
     def __init__(
@@ -271,8 +271,7 @@ class ControlledConvEMAStabilizer(Stabilizer):
         return z_stabilized
 
 
-# Extracted to a function for gradient checkpointing (product with unfolded tensor is
-# quite large)
+# Extracted to a function for gradient checkpointing (product with unfolded tensor is quite large)
 def _spatiotemporal_fusion(
     q: torch.Tensor,
     z: torch.Tensor,
