@@ -1,4 +1,4 @@
-output_dir: /home/argar/apgi/gQVR/experiments_video
+output_dir: /home/argar/apgi/gQVR/experiments_convEMADecoder_OnlyUnified
 
 dataset:
   batch_transform:
@@ -65,14 +65,15 @@ lifting_training: true
 qvae_path: /home/argar/apgi/gQVR/experiments/3bit_vae_10xlr_8xBS/0600000.pt
 
 # Loss params
-loss_mode: "l1_flow_perceptual" # "flow" must | optional: ["l1", "perceptual"] 
+loss_mode: "l1_perceptual_unified_rmse" # "l1_perceptual_unified_rmse_flow" | optional: ["l1", "perceptual", "unified"] 
 loss_scales:
   l1: 1.
   perceptual: 5.
-  flow: 100.
+  flow: 20.
+  unified: 1.
 
 
-lr_temp_stabilizer: 1e-5
+lr_conv_ema_decoder: 1e-5
 optimizer_type: adam
 opt_kwargs:
   betas: [0.9, 0.999]
@@ -86,6 +87,5 @@ resume_from_checkpoint: ~
 log_image_steps: 1000
 log_every: 500
 val_every: 1000
+latent_temp_stab_ckpt: "/home/argar/apgi/gQVR/experiments_video/checkpoints/tempStab_0080000.pt"
 resume_training: False
-# resume_ckpt_path: "/home/argar/apgi/gQVR/experiments_video/checkpoints/tempStab_0005000.pt"
-                 
