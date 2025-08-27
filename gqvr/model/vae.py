@@ -615,9 +615,15 @@ class ConvEMA_Decoder(nn.Module):
 
         # middle
         self.mid = nn.Module()
-        self.mid.block_1 = ResnetBlock(block_in, block_in, self.temb_ch, dropout)
+        self.mid.block_1 = ResnetBlock(in_channels=block_in,
+            out_channels=block_in,
+            temb_channels=self.temb_ch,
+            dropout=dropout,)
         self.mid.attn_1 = make_attn(block_in, attn_type=attn_type)
-        self.mid.block_2 = ResnetBlock(block_in, block_in, self.temb_ch, dropout)
+        self.mid.block_2 = ResnetBlock(in_channels=block_in,
+            out_channels=block_in,
+            temb_channels=self.temb_ch,
+            dropout=dropout,)
 
         # --- EMA memories ---
         self.ema_mem_block1_stab = None
@@ -628,15 +634,49 @@ class ConvEMA_Decoder(nn.Module):
         self.ema_mem_convout_unstab = None
 
         # --- EMA parameters per layer ---
-        def make_ema_params():
-            weights = nn.ParameterList([nn.UninitializedParameter() for _ in range(ema_hidden_layers + 2)])
-            biases = nn.ParameterList([nn.UninitializedParameter() for _ in range(ema_hidden_layers + 2)])
-            activations = nn.ModuleList([nn.LeakyReLU() for _ in range(ema_hidden_layers + 1)])
+        def make_ema_params(input_ch, output_ch):
+            weights = nn.ParameterList()
+            biases = nn.ParameterList()
+            activations = nn.ModuleList()
+
+            # First layer: input_ch -> hidden
+            w = nn.Parameter(torch.empty(ema_hidden_channels, input_ch,
+                                         ema_conv_kernel, ema_conv_kernel))
+            b = nn.Parameter(torch.zeros(ema_hidden_channels))
+            nn.init.kaiming_uniform_(w, a=0.2)
+            weights.append(w)
+            biases.append(b)
+            activations.append(nn.LeakyReLU())
+
+            # Hidden layers
+            for _ in range(ema_hidden_layers):
+                w = nn.Parameter(torch.empty(ema_hidden_channels, ema_hidden_channels,
+                                             ema_conv_kernel, ema_conv_kernel))
+                b = nn.Parameter(torch.zeros(ema_hidden_channels))
+                nn.init.kaiming_uniform_(w, a=0.2)
+                weights.append(w)
+                biases.append(b)
+                activations.append(nn.LeakyReLU())
+
+            # Last layer: hidden -> output_ch
+            w = nn.Parameter(torch.empty(output_ch, ema_hidden_channels,
+                                         ema_conv_kernel, ema_conv_kernel))
+            b = nn.Parameter(torch.full((output_ch,), -4.0))
+            nn.init.xavier_uniform_(w)
+            weights.append(w)
+            biases.append(b)
             return weights, biases, activations
 
-        self.ema1_weights, self.ema1_biases, self.ema1_activations = make_ema_params()
-        self.ema2_weights, self.ema2_biases, self.ema2_activations = make_ema_params()
-        self.ema3_weights, self.ema3_biases, self.ema3_activations = make_ema_params()
+        self.ema1_weights, self.ema1_biases, self.ema1_activations = make_ema_params(
+            input_ch=512*3, output_ch=512*(ema_fusion_kernel**2)
+        ) 
+        # input_ch: input + stabilized + unstabilized memories (so block_1 and block_2 = 512×3 = 1536)
+        self.ema2_weights, self.ema2_biases, self.ema2_activations = make_ema_params(
+            input_ch=512*3, output_ch=512*(ema_fusion_kernel**2)
+        ) # h + mem_stab + mem_unstab (same as above)
+        self.ema3_weights, self.ema3_biases, self.ema3_activations = make_ema_params(
+            input_ch=3*3, output_ch=3*(ema_fusion_kernel**2)
+        )
 
         self.ema_hidden_channels = ema_hidden_channels
         self.ema_hidden_layers = ema_hidden_layers
@@ -651,7 +691,12 @@ class ConvEMA_Decoder(nn.Module):
             attn = nn.ModuleList()
             block_out = ch * ch_mult[i_level]
             for i_block in range(self.num_res_blocks + 1):
-                block.append(ResnetBlock(block_in, block_out, self.temb_ch, dropout))
+                block.append(ResnetBlock(
+                    in_channels=block_in,
+                    out_channels=block_out,
+                    temb_channels=self.temb_ch,
+                    dropout=dropout,)
+                )
                 block_in = block_out
                 if curr_res in attn_resolutions:
                     attn.append(make_attn(block_in, attn_type=attn_type))
@@ -668,59 +713,52 @@ class ConvEMA_Decoder(nn.Module):
         self.conv_out = torch.nn.Conv2d(block_in, out_ch, 3, 1, 1)
 
     def _conv_ema(self, h, mem_stab, mem_unstab, weights, biases, activations):
-        unsqueeze = h.ndim == 3
-        if unsqueeze:
-            h = h.unsqueeze(1)
+        """
+        h: [B, C, H, W] per-frame or per-chunk
+        mem_stab, mem_unstab: previous memory tensors (same batch as h) or None
+        weights, biases, activations: EMA layer parameters
+        """
 
-        if mem_unstab is not None:
-            q = torch.cat([h, mem_stab, mem_unstab], dim=1)
+        # Ensure memory is initialized and matches batch size
+        if mem_stab is None or mem_stab.shape[0] != h.shape[0]:
+            mem_stab = torch.zeros_like(h)
+            mem_unstab = torch.zeros_like(h)
 
-            if torch.nn.parameter.is_lazy(weights[0]):
-                in_ch = q.shape[1]
-                hidden_ch = self.ema_hidden_channels
-                for i in range(self.ema_hidden_layers):
-                    weights[i].materialize((hidden_ch, hidden_ch, self.ema_conv_kernel, self.ema_conv_kernel))
-                    biases[i].materialize((hidden_ch,))
-                out_ch = h.shape[1] * (self.ema_fusion_kernel ** 2)
-                weights[-1].materialize((out_ch, hidden_ch, self.ema_conv_kernel, self.ema_conv_kernel))
-                biases[-1].materialize((out_ch,))
-                for w in weights[:-1]:
-                    nn.init.xavier_uniform_(w, nn.init.calculate_gain("leaky_relu"))
-                nn.init.xavier_uniform_(weights[-1], nn.init.calculate_gain("linear"))
-                for b in biases[:-1]:
-                    nn.init.zeros_(b)
-                nn.init.constant_(biases[-1], -4.0)
+        # Concatenate input with stabilized & unstabilized memory
+        q = torch.cat([h, mem_stab, mem_unstab], dim=1)  # [B, 3*C, H, W]
 
-            q = nn.functional.conv2d(q, weights[0], biases[0], padding="same")
-            q = activations[0](q)
-            skip = q
-            for i in range(self.ema_hidden_layers):
-                q = nn.functional.conv2d(q, weights[i+1], biases[i+1], padding="same")
-                q = activations[i+1](q)
-            if self.ema_skip_connection:
-                q = q + skip
+        # Forward through EMA conv layers
+        q = nn.functional.conv2d(q, weights[0], biases[0], padding="same")
+        q = activations[0](q)
+        skip = q
 
-            shape = h.shape
-            head = nn.functional.conv2d(q, weights[-1], biases[-1], padding="same")
-            head = rearrange(head, "b (c p) h w -> b c p (h w)", c=shape[1])
-            eta = torch.cat([head, torch.zeros_like(head[:, :, :1])], dim=2)
-            eta = eta.softmax(dim=2)
-            mem = nn.functional.unfold(mem_stab, self.ema_fusion_kernel, padding=self.ema_fusion_kernel // 2)
-            mem = rearrange(mem, "b (c p) hw -> b c p hw", c=shape[1])
-            h_flat = rearrange(h, "b c h w -> b c (h w)")
-            h = (mem * eta[:, :, :-1]).sum(dim=2) + eta[:, :, -1] * h_flat
-            h = h.view(shape)
+        for i in range(self.ema_hidden_layers):
+            q = nn.functional.conv2d(q, weights[i+1], biases[i+1], padding="same")
+            q = activations[i+1](q)
 
-        mem_stab = h.clone()
-        mem_unstab = h.clone()
-        if self.detach_memory:
-            mem_stab = mem_stab.detach()
-            mem_unstab = mem_unstab.detach()
+        if self.ema_skip_connection:
+            q = q + skip
 
-        if unsqueeze:
-            h = h.squeeze(1)
+        # Final conv
+        shape = h.shape
+        head = nn.functional.conv2d(q, weights[-1], biases[-1], padding="same")
+        head = rearrange(head, "b (c p) h w -> b c p (h w)", c=shape[1])
+        eta = torch.cat([head, torch.zeros_like(head[:, :, :1])], dim=2)
+        eta = eta.softmax(dim=2)
 
-        return h, mem_stab, mem_unstab
+        # Apply to stabilized memory
+        mem_unf = nn.functional.unfold(mem_stab, kernel_size=self.ema_fusion_kernel, padding=self.ema_fusion_kernel // 2)
+        mem_unf = rearrange(mem_unf, "b (c p) hw -> b c p hw", c=shape[1])
+        h_flat = rearrange(h, "b c h w -> b c (h w)")
+        h_out = (mem_unf * eta[:, :, :-1]).sum(dim=2) + eta[:, :, -1] * h_flat
+        h_out = h_out.view(shape)
+
+        # Update memory (detach to avoid gradients through previous frames)
+        mem_stab = h_out.clone().detach()
+        mem_unstab = h_out.clone().detach()
+
+        return h_out, mem_stab, mem_unstab
+
 
     def forward(self, z):
         h = self.conv_in(z)
