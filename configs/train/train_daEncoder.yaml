@@ -47,7 +47,7 @@ train:
   # pretrained sd v2.1-zsnr path
   sd_path: "/home/argar/apgi/gQVR/pretrained_checkpoints/sd2.1-base-zsnr-laionaes5.ckpt"
   # experiment directory path
-  exp_dir: /home/argar/apgi/gQVR/experiments
+  exp_dir: /home/argar/apgi/gQVR/experiments/multi-bit
   learning_rate: 1e-5
   batch_size: 1
   num_workers: 96
