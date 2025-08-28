@@ -163,7 +163,7 @@ def main(args) -> None:
         for batch in loader:
             to(batch, device)
             batch = batch_transform(batch)
-            gt, lq, _ = batch
+            gt, lq, prompt, gt_path = batch
             
             gt = rearrange((gt + 1) / 2, "b h w c -> b c h w").contiguous().float()
             lq = rearrange(lq, "b h w c -> b c h w").contiguous().float()
@@ -280,7 +280,7 @@ def main(args) -> None:
                 for val_batch in val_loader:
                     to(val_batch, device)
                     val_batch = batch_transform(val_batch)
-                    val_gt, val_lq, _ = val_batch
+                    val_gt, val_lq, val_prompt, val_gt_path = val_batch
                     val_gt = (
                         rearrange((val_gt + 1) / 2, "b h w c -> b c h w")
                         .contiguous()
