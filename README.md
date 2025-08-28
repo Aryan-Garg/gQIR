@@ -38,6 +38,8 @@ Keep changing the main function for now (make it arg passing only during deploym
 <!-- Arch Image -->
 
 #### Stage 1 - SPAD-CMOS Aligned VAE:
+
+> conda activate hypir
 > accelerate launch train_daEncoder.py --config configs/train/train_daEncoder.yaml
 
 #### Stage 2 - Latent Space Enhancement - Adversarial Training with Diffusion Initialization:
