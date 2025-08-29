@@ -67,10 +67,10 @@ qvae_path: /home/argar/apgi/gQVR/experiments/3bit_vae_10xlr_8xBS/0600000.pt
 # Loss params
 loss_mode: "l1_perceptual_unified_rmse" # "l1_perceptual_unified_rmse_flow" | optional: ["l1", "perceptual", "unified"] 
 loss_scales:
-  l1: 1.
-  perceptual: 5.
-  flow: 20.
-  unified: 1.
+  l1: 5.
+  perceptual: 15.
+  flow: 40.
+  unified: 40.
 
 
 lr_conv_ema_decoder: 1e-5
