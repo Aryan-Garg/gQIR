@@ -1,0 +1,91 @@
+output_dir: /home/argar/apgi/gQVR/experiments_3d-Decoder
+
+dataset:
+  batch_transform:
+      target: gqvr.dataset.batch_transform.IdentityBatchTransform
+  train:
+    batch_size: 1
+    num_workers: 96
+    target: gqvr.dataset.spc_video_streaming.SlidingLatentVideoDataset
+    params:
+      file_list: /home/argar/apgi/gQVR/dataset_txt_files/video_dataset_txt_files/saved_latents_vids.txt
+      file_backend_cfg:
+        target: gqvr.dataset.file_backend.HardDiskBackend
+      out_size: 512
+      crop_type: "center"
+      use_hflip: False
+      precomputed_latents: True
+      sliding_window: 3
+      chunk_size: 4
+
+  val:
+    batch_size: 1
+    num_workers: 96
+    target: gqvr.dataset.spc_video_streaming.SlidingLatentVideoDataset
+    params:
+      file_list: /home/argar/apgi/gQVR/dataset_txt_files/video_dataset_txt_files/saved_latents_vids_val.txt
+      file_backend_cfg:
+        target: gqvr.dataset.file_backend.HardDiskBackend
+      out_size: 512
+      crop_type: "center"
+      use_hflip: False
+      precomputed_latents: True
+      sliding_window: 3
+      chunk_size: 4
+    batch_transform:
+      target: gqvr.dataset.batch_transform.IdentityBatchTransform
+
+# qVAE * temp config:    
+model:
+  temp_cfg:
+    z_channels: 4
+    z_resolution: 64
+    # heads:  
+
+  vae_cfg:
+    embed_dim: 4
+    ddconfig:
+      double_z: true
+      z_channels: 4
+      resolution: 512
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult:
+      - 1
+      - 2
+      - 4
+      - 4
+      num_res_blocks: 2
+      attn_resolutions: []
+      dropout: 0.0
+
+prompt_training: false
+lifting_training: true
+qvae_path: /home/argar/apgi/weights_gqvr/3bit_vae_10xlr_8xBS/0600000.pt
+
+# Loss params
+loss_mode: "l1_perceptual_unified" # "l1_perceptual_unified_rmse_flow" | optional: ["l1", "perceptual", "unified"] 
+loss_scales:
+  l1: 1.
+  perceptual: 50.
+  flow: 50.
+  unified: 50.
+
+
+lr_conv_ema_decoder: 1e-5
+optimizer_type: adam
+opt_kwargs:
+  betas: [0.9, 0.999]
+
+mixed_precision: bf16
+seed: 310
+max_train_steps: 100000
+checkpointing_steps: 5000
+checkpoints_total_limit: None
+resume_from_checkpoint: ~
+log_image_steps: 1000
+log_every: 500
+val_every: 1000
+latent_temp_stab_ckpt: "/home/argar/apgi/weights_gqvr/experiments_tempStab/checkpoints/tempStab_0100000.pt"
+resume_training: False
