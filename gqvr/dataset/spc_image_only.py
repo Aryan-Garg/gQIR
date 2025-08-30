@@ -74,12 +74,12 @@ class SPCDataset(data.Dataset):
         return image
 
 
-    def generate_spc_from_gt(self, img_gt):
+    def generate_spc_from_gt(self, img_gt, N=1):
         if img_gt is None:
             return None
         img = srgb_to_linearrgb(img_gt / 255.)
         img = emulate_spc(img, 
-                          factor=1.0 # Brightness directly proportional to this hparam. 1.0 => scene's natural lighting
+                          factor= 1. / N # Brightness directly proportional to this hparam. 1.0 => scene's natural lighting
                         )
         return img
 
@@ -134,15 +134,13 @@ class SPCDataset(data.Dataset):
                 index = random.randint(0, len(self) - 1)
                 continue
 
-            # NOTE: SPAD bit-resolution was changed permanently --- No need for 1-bit VAEs
-            # However, to revert back... uncomment:
-            # img_lq = self.generate_spc_from_gt(img_gt)
-            # And comment the following
+
             img_lq_sum = np.zeros_like(img_gt, dtype=np.float32)
             bits = random.randint(1, 10) # mixed bit depth training
+            # NOTE: No motion-blur. Assumes SPC-fps >>> scene motion
             N = 2**bits - 1
             for i in range(N): # 4-bit (2**4 - 1)
-                img_lq_sum = img_lq_sum + self.generate_spc_from_gt(img_gt)
+                img_lq_sum = img_lq_sum + self.generate_spc_from_gt(img_gt, N=N)
             img_lq = img_lq_sum / (1.0*N)
 
 

@@ -62,10 +62,10 @@ model:
 
 prompt_training: false
 lifting_training: true
-qvae_path: /home/argar/apgi/gQVR/experiments/3bit_vae_10xlr_8xBS/0600000.pt
+qvae_path: /home/argar/apgi/weights_gqvr/3bit_vae_10xlr_8xBS/0600000.pt
 
 # Loss params
-loss_mode: "l1_perceptual_unified_rmse" # "l1_perceptual_unified_rmse_flow" | optional: ["l1", "perceptual", "unified"] 
+loss_mode: "l1_perceptual_unified" # "l1_perceptual_unified_rmse_flow" | optional: ["l1", "perceptual", "unified"] 
 loss_scales:
   l1: 5.
   perceptual: 15.
@@ -81,11 +81,11 @@ opt_kwargs:
 mixed_precision: bf16
 seed: 310
 max_train_steps: 100000
-checkpointing_steps: 1000
+checkpointing_steps: 5000
 checkpoints_total_limit: None
 resume_from_checkpoint: ~
 log_image_steps: 1000
 log_every: 500
 val_every: 1000
-latent_temp_stab_ckpt: "/home/argar/apgi/gQVR/experiments_video/checkpoints/tempStab_0080000.pt"
+latent_temp_stab_ckpt: "/home/argar/apgi/weights_gqvr/experiments_tempStab/checkpoints/tempStab_0100000.pt"
 resume_training: False

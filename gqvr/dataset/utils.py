@@ -236,6 +236,12 @@ def emulate_spc(
 
     Returns:
         Binary single photon frame
+
+        Up --> More PPP
+        down --> Low-light
+
+        1    -> 0.3           PPP
+        1000 -> 0.3/1000  --> V. Dark
     """
     # Perform bernoulli sampling (equivalent to binomial w/ n=1)
     rng = np.random.default_rng()

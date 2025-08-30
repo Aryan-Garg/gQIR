@@ -84,27 +84,28 @@ Credits:
 
 ---
 
+TODO:
 ### Dataset Statistics so far (Not including xd-scraped):
 
-Total frames: 1,424,188
-Videos: 5098
+Total frames: 1,424,188 -> 2.7M
+Videos: 5098 -> 42k
 
 Training: 1,424,188 - 7317
 Testing/Validation: 990 (xvfi) + 6327 (i22k) = 7317
 
 ---
 
-
+TODO:
 ## Video Model Training Progression
 
-| Stage |            Dataset           |  FPS | Purpose |
-|-----  |----------------------------  |:----:|-------  |
-| 1     | UDM10 + SPMC + YouHQ         | 24   | Just like WarmupLR -- but build most of video prior + temp consistency here  | 
-| 2     | visionsim-untouched (Mode A) | 100  | Foundational motion + clean GT flow                                  |
-| 3     | REDS 120fps                  | 120  | Approximated flow but real scenes - reinstall realism!               |
-| 4     | visionsim-4x (Mode B)        | 400  | Intermediate transition fps                                          |
-| 5     | XVFI                         | 1000 | Real captures, temporal structure                                    |
-| 6     | I2-2000fps                   | 2000 | Real high-fps captures                                               |
+| Stage |            Dataset           |  FPS      | Purpose |
+|-----  |----------------------------  |:----:     |-------  |
+| 1     | UDM10 + SPMC + YouHQ         | 24        | Just like WarmupLR -- but build most of video prior + temp consistency here  | 
+| 2     | visionsim-untouched (Mode A) | 100       | Foundational motion + clean GT flow                                  |
+| 3     | REDS 120fps                  | 120       | Approximated flow but real scenes - reinstall realism!               |
+| 4     | visionsim-4x (Mode B)        | 400       | Intermediate transition fps                                          |
+| 5     | XVFI                         | 1000      | Real captures, temporal structure                                    |
+| 6     | I2-2000fps                   | 2000      | Real high-fps captures                                               |
 | 7     | xd-scraped                   | 3k - 200k | Non-rigid, fluid, deformable physics | 390 scenes * 200+ frames |
 | 8     | Mixed fps training           | 24 - 200k | Boost varying fps producing capabilities                        |
 

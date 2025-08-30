@@ -47,9 +47,6 @@ class TemporalLocalAttention(nn.Module):  # b t c
         return out
     
 
-
-
-
 # NOTE: 
 # The 3D conv attention addresses small, local spatial-temporal noise/artifacts.
 # The temporal-only module enforces smoothness along time globally, across all channels.

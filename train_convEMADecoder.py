@@ -170,7 +170,7 @@ def compute_stage3_loss_streaming(zs, gts, vae, lpips_model, raft_model, loss_mo
     total_loss = torch.zeros([], device=zs.device)
 
     prev_dec = None  # decoded pred at t-1 (for flow)
-
+    prev_gt = None
     for t0 in range(0, T, chunk_T):
         t1 = min(T, t0 + chunk_T)
         z_chunk = zs[:, t0:t1, ...].to(torch.float32)          # [1, tc, 4, 64, 64]; fp32 for best optical flow computations
@@ -207,13 +207,15 @@ def compute_stage3_loss_streaming(zs, gts, vae, lpips_model, raft_model, loss_mo
                 total_flow = total_flow + scales.flow * (diff.pow(2).sum() / denom)
             
             if do_unified_rmse and prev_dec is not None:
-                total_rmse = total_rmse + (scales.unified * ((dec_t - prev_dec).pow(2).sum().sqrt()))
+                total_rmse = total_rmse + (scales.unified *  F.l1_loss(dec_t - prev_dec, gt_t - prev_gt))
 
             prev_dec = dec_t.detach()  # keep the decoded prior for flow next step; detach to avoid long graph
+            prev_gt = gt_t
 
         # Free chunk tensors ASAP
         del z_flat, z_chunk, gt_chunk
         # torch.cuda.empty_cache()
+        
     if do_flow:
         total_loss = total_loss + total_flow
     if do_l1:
