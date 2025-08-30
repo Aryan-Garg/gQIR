@@ -990,17 +990,17 @@ class Decoder_3D(nn.Module):
         # middle
         h = self.mid.block_1(h, temb)
         ###############
-        h = h.view(1, -1, h.size(1), h.size(2), h.size(3)) # 1, T, C, H, W
-        h = self.temp_mid_block_1(h)
-        h = h.view(-1, h.size(2), h.size(3), h.size(4))
+        h = h.view(1, h.size(1), -1, h.size(2), h.size(3)) # 1, C, T, H, W
+        h = self.temp_mid_block_1(h) # 1, C_out, T_out, H_out, W_out
+        h = h.view(-1, h.size(1), h.size(3), h.size(4))
         ###############
         h = self.mid.attn_1(h)
         
         h = self.mid.block_2(h, temb)
         ###############
-        h = h.view(1, -1, h.size(1), h.size(2), h.size(3)) # 1, T, C, H, W
+        h = h.view(1, h.size(1), -1, h.size(2), h.size(3)) # 1, T, C, H, W
         h = self.temp_mid_block_2(h)
-        h = h.view(-1, h.size(2), h.size(3), h.size(4))
+        h = h.view(-1, h.size(1), h.size(3), h.size(4))
         ###############
 
         # upsampling
@@ -1009,9 +1009,9 @@ class Decoder_3D(nn.Module):
                 h = self.up[i_level].block[i_block](h, temb)
                 if len(self.up[i_level].attn) > 0:
                     ###############
-                    h = h.view(1, -1, h.size(1), h.size(2), h.size(3))
+                    h = h.view(1, h.size(1), -1, h.size(2), h.size(3))
                     h = self.up[i_level].temp[i_block](h)
-                    h = h.view(-1, h.size(2), h.size(3), h.size(4))
+                    h = h.view(-1, h.size(1), h.size(3), h.size(4))
                     ###############
                     h = self.up[i_level].attn[i_block](h)
 
@@ -1027,11 +1027,42 @@ class Decoder_3D(nn.Module):
         h = self.conv_out(h)
 
         ###############
-        h = h.view(1, -1, h.size(1), h.size(2), h.size(3)) # 1, T, C, H, W
+        h = h.view(1, h.size(1), -1, h.size(2), h.size(3)) # 1, T, C, H, W
         h = self.temp_conv3d_out(h)
-        h = h.view(-1, h.size(2), h.size(3), h.size(4))
+        h = h.view(-1, h.size(1), h.size(3), h.size(4))
         ###############
 
         if self.tanh_out:
             h = torch.tanh(h)
         return h
+
+
+class Decoder3D_AutoencoderKL(nn.Module):
+    def __init__(self, ddconfig, embed_dim):
+        super().__init__()
+        self.encoder = Encoder(**ddconfig)
+        self.decoder = Decoder_3D(**ddconfig)
+        assert ddconfig["double_z"]
+        self.quant_conv = torch.nn.Conv2d(2 * ddconfig["z_channels"], 2 * embed_dim, 1)
+        self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
+        self.embed_dim = embed_dim
+
+    def encode(self, x):
+        h = self.encoder(x)
+        moments = self.quant_conv(h)
+        posterior = DiagonalGaussianDistribution(moments)
+        return posterior
+
+    def decode(self, z):
+        z = self.post_quant_conv(z)
+        dec = self.decoder(z)
+        return dec
+
+    def forward(self, input, sample_posterior=True):
+        posterior = self.encode(input)
+        if sample_posterior:
+            z = posterior.sample()
+        else:
+            z = posterior.mode()
+        dec = self.decode(z)
+        return dec, posterior
