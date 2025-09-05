@@ -989,29 +989,46 @@ class Decoder_3D(nn.Module):
 
         # middle
         h = self.mid.block_1(h, temb)
+        print("[+] After mid_block_1: ", h.size())
         ###############
-        h = h.view(1, h.size(1), -1, h.size(2), h.size(3)) # 1, C, T, H, W
-        h = self.temp_mid_block_1(h) # 1, C_out, T_out, H_out, W_out
-        h = h.view(-1, h.size(1), h.size(3), h.size(4))
+        h_3d = h.view(1, h.size(1), -1, h.size(2), h.size(3)) # 1, C, T, H, W
+        print("[+] Reshape for first 3d conv: ", h_3d.size())
+        h_3d = self.temp_mid_block_1(h_3d) # 1, C_out, T_out, H_out, W_out
+        print("[+] After first 3d conv: ", h_3d.size())
+        h_3d = h_3d.view(-1, h.size(1), h.size(3), h.size(4)) 
+        print("[+] Reshape for residual addition after first 3d conv: ", h_3d.size())
+        h = h + h_3d
         ###############
-        h = self.mid.attn_1(h)
         
+        h = self.mid.attn_1(h)
+        print("[+] After mid_attn_1: ", h.size())
         h = self.mid.block_2(h, temb)
+        print("[+] After mid_block_2: ", h.size())
+
         ###############
-        h = h.view(1, h.size(1), -1, h.size(2), h.size(3)) # 1, T, C, H, W
-        h = self.temp_mid_block_2(h)
-        h = h.view(-1, h.size(1), h.size(3), h.size(4))
+        h_3d2 = h.view(1, h.size(1), -1, h.size(2), h.size(3)) # 1, T, C, H, W
+        print("[+] Reshape after mid_block_2 for 2nd conv3d: ", h_3d2.size())
+        h_3d2 = self.temp_mid_block_2(h_3d2)
+        print("[+] After 2nd conv3d: ", h_3d2.size())
+        h_3d2 = h_3d2.view(-1, h.size(1), h.size(3), h.size(4))
+        print("[+] Reshape h3d2 for residual addition: ", h_3d2.size())
+        h = h + h_3d2
         ###############
 
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):
             for i_block in range(self.num_res_blocks + 1):
                 h = self.up[i_level].block[i_block](h, temb)
+                print(f"i_block: {i_block} h.shape:", h.size())
                 if len(self.up[i_level].attn) > 0:
                     ###############
-                    h = h.view(1, h.size(1), -1, h.size(2), h.size(3))
-                    h = self.up[i_level].temp[i_block](h)
-                    h = h.view(-1, h.size(1), h.size(3), h.size(4))
+                    h_res = h.view(1, h.size(1), -1, h.size(2), h.size(3))
+                    print("[+] h reshaped for 3d conv:", h_res.size())
+                    h_res = self.up[i_level].temp[i_block](h_res)
+                    print("[+] h after 3d conv:", h_res.size())
+                    h_res = h_res.view(-1, h.size(1), h.size(3), h.size(4))
+                    print("[+] h reshaped for residual addn:", h_res.size())
+                    h = h + h_res 
                     ###############
                     h = self.up[i_level].attn[i_block](h)
 
@@ -1025,11 +1042,15 @@ class Decoder_3D(nn.Module):
         h = self.norm_out(h)
         h = nonlinearity(h)
         h = self.conv_out(h)
-
+        print("[+] After conv_out shape:", h.size())
         ###############
-        h = h.view(1, h.size(1), -1, h.size(2), h.size(3)) # 1, T, C, H, W
-        h = self.temp_conv3d_out(h)
-        h = h.view(-1, h.size(1), h.size(3), h.size(4))
+        h_out = h.view(1, h.size(1), -1, h.size(2), h.size(3)) # 1, T, C, H, W
+        print("[+] Reshape after conv_out:", h.size())
+        h_out = self.temp_conv3d_out(h_out)
+        print("[+] After last 3d conv:", h.size())
+        h_out = h_out.view(-1, h.size(1), h.size(3), h.size(4))
+        print("[+] Reshape after last 3d conv:", h.size())
+        h = h + h_out
         ###############
 
         if self.tanh_out:

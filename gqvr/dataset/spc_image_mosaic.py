@@ -15,7 +15,7 @@ from .utils import load_file_list, center_crop_arr, random_crop_arr, srgb_to_lin
 from ..utils.common import instantiate_from_config
 
 
-class SPCDataset(data.Dataset):
+class SPCDataset_Mosaic(data.Dataset):
     """
         Dataset for finetuning the VAE's encoder and Adversarial FT Stages (independent of each other).
         Args:
@@ -34,9 +34,10 @@ class SPCDataset(data.Dataset):
                     file_backend_cfg: Mapping[str, Any],
                     out_size: int,
                     crop_type: str,
-                    use_hflip: bool) -> "SPCDataset":
+                    use_hflip: bool,
+                    bits=3) -> "SPCDataset_Mosaic":
 
-        super(SPCDataset, self).__init__()
+        super(SPCDataset_Mosaic, self).__init__()
         self.file_list = file_list
         self.image_files = load_file_list(file_list)
         self.file_backend = instantiate_from_config(file_backend_cfg)
@@ -45,6 +46,58 @@ class SPCDataset(data.Dataset):
         self.use_hflip = use_hflip # No need for 1.5M big dataset
         assert self.crop_type in ["none", "center", "random"]
         self.HARDDISK_DIR = "/mnt/disks/behemoth/datasets/"
+        self.bits = bits
+        print(f"[+] Sim bits = {self.bits}")
+
+
+    def get_mosaic(self, img):
+        """
+            Convert a demosaiced RGB image (HxWx3) into an RGGB Bayer mosaic.
+        """
+        R = img[:, :, 0]
+        G = img[:, :, 1]
+        B = img[:, :, 2]
+
+        bayer = np.zeros_like(img)
+
+        bayer_pattern_type = random.choice(["RGGB", "GRBG", "BGGR", "GBRG"])
+
+        if bayer_pattern_type == "RGGB":
+            # Red
+            bayer[0::2, 0::2, 0] = R[0::2, 0::2]
+            # Green
+            bayer[0::2, 1::2, 1] = G[0::2, 1::2]
+            bayer[1::2, 0::2, 1] = G[1::2, 0::2]
+            # Blue
+            bayer[1::2, 1::2, 2] = B[1::2, 1::2]
+        elif bayer_pattern_type == "GRBG":
+            # Red
+            bayer[0::2, 1::2, 0] = R[0::2, 1::2]
+            # Green 
+            bayer[0::2, 0::2, 1] = G[0::2, 0::2]
+            bayer[1::2, 1::2, 1] = G[1::2, 1::2]
+            # Blue
+            bayer[1::2, 0::2, 2] = B[1::2, 0::2]
+            
+        elif bayer_pattern_type == "BGGR":
+            # Blue
+            bayer[0::2, 0::2, 2] = B[0::2, 0::2]
+            # Green
+            bayer[0::2, 1::2, 1] = G[0::2, 1::2]
+            bayer[1::2, 0::2, 1] = G[1::2, 0::2]
+            # Red
+            bayer[1::2, 1::2, 0] = R[1::2, 1::2]
+        
+        else: # GBRG
+            # Green
+            bayer[0::2, 0::2, 1] = G[0::2, 0::2]
+            bayer[1::2, 1::2, 1] = G[1::2, 1::2]
+            # Blue
+            bayer[0::2, 1::2, 2] = B[0::2, 1::2]
+            # Red
+            bayer[1::2, 0::2, 0] = R[1::2, 0::2]
+
+        return bayer
 
 
     def load_gt_image(
@@ -104,31 +157,6 @@ class SPCDataset(data.Dataset):
                 print(f"Could not load: {gt_path}, setting a random index")
                 index = random.randint(0, len(self) - 1)
                 continue
-            # BUG: Color channels: BGR2RGB errs
-            # if "xvfi" in gt_path:
-            #     path_elements = img_path.split("/")
-            #     lq_path = f"{path_elements[0]}/{path_elements[1]}/spc/{path_elements[2]}_{path_elements[3]}_{path_elements[4]}/{path_elements[5]}"
-            #     lq_path = self.HARDDISK_DIR + lq_path[2:]
-            #     # print("[+] XVFI lq path:", lq_path)
-            #     img_lq = self.load_gt_image(lq_path)
-            # elif "i2_2000fps" in gt_path:
-            #     lq_path = gt_path.replace("extracted", "spc")
-            #     # img_lq = self.load_gt_image(lq_path)
-            #     # img_lq = cv2.cvtColor(img_lq, cv2.COLOR_BGR2RGB)
-            # elif "visionsim" in gt_path:
-            #     if "frames_1x" in gt_path:
-            #         lq_path = gt_path.replace("frames_1x/frames", "spc_frames_1x")
-            #         # print("[+] visionsim lq path:", lq_path)
-            #     elif "frames_4x" in gt_path:
-            #         lq_path = gt_path.replace("frames_4x/frames", "spc_frames_4x")
-            #         # print("[+] visionsim lq path:", lq_path)
-            #     elif "frames_32x" in gt_path:
-            #         lq_path = gt_path.replace("frames_32x/frames", "spc_frames_32x")
-            #     img_lq = self.load_gt_image(lq_path)
-            #     img_lq = cv2.cvtColor(img_lq, cv2.COLOR_BGR2RGB)
-            # else:
-            #     # This is DIV2K, FFHQ, LHQ, REDS, UDM10, SPMC, FLICKR2K or LAION-170M dataset
-            #     img_lq = self.generate_spc_from_gt(img_gt)
             
             if img_gt is None:
                 print(f"failed to load {gt_path} or generate lq image, try another image")
@@ -137,12 +165,10 @@ class SPCDataset(data.Dataset):
 
 
             img_lq_sum = np.zeros_like(img_gt, dtype=np.float32)
-            bits = random.randint(1, 10) # mixed bit depth training
             # NOTE: No motion-blur. Assumes SPC-fps >>> scene motion
-            N = 2**bits - 1
-            for i in range(N): # 4-bit (2**4 - 1)
-                # img_lq_sum = img_lq_sum + self.generate_spc_from_gt(img_gt, N=N)
-                img_lq_sum = img_lq_sum + self.generate_spc_from_gt(img_gt)
+            N = 2**self.bits - 1
+            for i in range(N): # 3-bit (2**3 - 1)
+                img_lq_sum = img_lq_sum + self.get_mosaic(self.generate_spc_from_gt(img_gt))
             img_lq = img_lq_sum / (1.0*N)
 
 
@@ -168,12 +194,13 @@ class SPCDataset(data.Dataset):
 
 if __name__ == "__main__":
     # Testing/Example usage
-    dataset = SPCDataset(
+    dataset = SPCDataset_Mosaic(
         file_list="/mnt/disks/behemoth/datasets/dataset_txt_files/combined_dataset.txt",
-        file_backend_cfg={"target": "gqvr.dataset.file_backend.HardDiskBackend"},
+        file_backend_cfg={"target": "core.dataset.file_backend.HardDiskBackend"},
         out_size=512,
         crop_type="center",
         use_hflip=False,
+        bits = 3
     )
     print(f"Complete Dataset length: {len(dataset)}")
     sample = next(iter(dataset))

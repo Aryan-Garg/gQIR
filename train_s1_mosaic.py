@@ -117,10 +117,10 @@ def main(args) -> None:
 
     # Prepare models for training/inference:
     vae.to(device)
-    vae, opt, loader, val_loader = accelerator.prepare(
-        vae, opt, loader, val_loader
+    vae.encoder, opt, loader, val_loader = accelerator.prepare(
+        vae.encoder, opt, loader, val_loader
     )
-    vae = accelerator.unwrap_model(vae)
+    vae.encoder = accelerator.unwrap_model(vae.encoder)
 
     # for name, p in vae.named_parameters():
     #     print(f"{name} -> {p.shape} isTrainable? {p.requires_grad}")
@@ -252,10 +252,10 @@ def main(args) -> None:
                     log_pred_gt = vae.decode(vae.encode(log_gt).mode())
                 if accelerator.is_local_main_process:
                     for tag, image in [
-                        ("image/pred_gt", log_pred_gt),
-                        ("image/pred", log_pred),
-                        ("image/gt", log_gt),
-                        ("image/lq", log_lq),
+                        ("image/pred_gt", (log_pred_gt+1) / 2),
+                        ("image/pred", (log_pred+1) / 2),
+                        ("image/gt", (log_gt + 1) / 2),
+                        ("image/lq", (log_lq + 1) / 2),
                     ]:
                         writer.add_image(tag, make_grid(image, nrow=4), global_step)
                 vae.encoder.train()

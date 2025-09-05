@@ -1,0 +1,68 @@
+model:
+  vae_cfg:
+    embed_dim: 4
+    ddconfig:
+      double_z: true
+      z_channels: 4
+      resolution: 512
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult:
+      - 1
+      - 2
+      - 4
+      - 4
+      num_res_blocks: 2
+      attn_resolutions: []
+      dropout: 0.0
+
+
+dataset:
+  train:
+    target: gqvr.dataset.spc_image_mosaic.SPCDataset_Mosaic
+    params:
+      file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/combined_dataset.txt
+      file_backend_cfg:
+        target: gqvr.dataset.file_backend.HardDiskBackend
+      out_size: 512
+      crop_type: "center"
+      use_hflip: False
+      bits: 3
+  val:
+    target: gqvr.dataset.spc_image_mosaic.SPCDataset_Mosaic
+    params:
+      file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/random_val.txt
+      file_backend_cfg:
+        target: gqvr.dataset.file_backend.HardDiskBackend
+      out_size: 512
+      crop_type: "center"
+      use_hflip: False
+      bits: 3
+
+
+batch_transform:
+  target: gqvr.dataset.batch_transform.IdentityBatchTransform
+  # params:
+
+train:
+  # pretrained sd v2.1-zsnr path
+  sd_path: "/home/argar/apgi/gQVR/pretrained_checkpoints/sd2.1-base-zsnr-laionaes5.ckpt"
+  # experiment directory path
+  exp_dir: /home/argar/apgi/gQVR/experiments/mosaic_3bit
+  learning_rate: 1e-5
+  batch_size: 1
+  num_workers: 96
+  train_steps: 3_000_000
+  log_every: 1000
+  ckpt_every: 50000
+  image_every: 5000
+  val_every: 5000
+  # Loss params
+  loss_mode: "ls_gt_perceptual" # "mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual"
+  loss_scales:
+    lsa: 0.01
+    mse: 0.
+    gt: 1.
+    perceptual_gt: 50.
+    perceptual_lq: 50.

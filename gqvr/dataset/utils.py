@@ -235,7 +235,7 @@ def emulate_spc(
         rng (np.random.Generator, optional): Random number generator. Defaults to None.
 
     Returns:
-        Binary single photon frame
+        Binary single photon frame in [0,1]
 
         Up --> More PPP
         down --> Low-light
@@ -247,6 +247,20 @@ def emulate_spc(
     rng = np.random.default_rng()
     # print("inside rng:", 1.0 - np.exp(-img * factor))
     return rng.binomial(cast(npt.NDArray[np.integer], 1), 1.0 - np.exp(-img * factor))
+
+
+def mle_intensity_from_S(S, n_q, tau=1.0, eta=1.0, fix_inf=True):
+    """MLE estimate phi = -ln(1 - S/n_q) / (tau * eta). S can be int array."""
+    S = np.asarray(S, dtype=float)
+    if fix_inf:
+        # avoid S == n_q (perfect saturation) -> infinite lambda
+        S = np.where(S >= n_q, n_q - 1.0, S)
+    p_hat = S / float(n_q)
+    # numerical safety: clip p_hat to [0, 1-ε]
+    eps = 1e-12
+    p_hat = np.clip(p_hat, 0.0, 1.0 - eps)
+    phi = -np.log(1.0 - p_hat) / (tau * eta)
+    return phi
 
 
 class USMSharp(torch.nn.Module):
