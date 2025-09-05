@@ -28,6 +28,7 @@ dataset:
       out_size: 512
       crop_type: "center"
       use_hflip: False
+      bits: 1
   val:
     target: gqvr.dataset.spc_image_mosaic.SPCDataset_Mosaic
     params:
@@ -37,6 +38,7 @@ dataset:
       out_size: 512
       crop_type: "center"
       use_hflip: False
+      bits: 1
 
 
 batch_transform:
@@ -49,7 +51,7 @@ train:
   # experiment directory path
   exp_dir: /home/argar/apgi/gQVR/experiments/mosaic_1bit
   learning_rate: 1e-5
-  batch_size: 1
+  batch_size: 8
   num_workers: 96
   train_steps: 3_000_000
   log_every: 1000

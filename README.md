@@ -41,6 +41,8 @@ Keep changing the main function for now (make it arg passing only during deploym
 
 > conda activate hypir
 > accelerate launch train_daEncoder.py --config configs/train/train_daEncoder.yaml
+> CUDA_VISIBLE_DEVICES=8,9,10,11,12,13,14,15 accelerate launch --main_process_port 29502 train_s1_mosaic.py --config configs/train/train_s1_mosaic_1bit.yaml
+> CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --main_process_port 29503 train_s1_mosaic.py --config configs/train/train_s1_mosaic_3bit.yaml
 
 #### Stage 2 - Latent Space Enhancement - Adversarial Training with Diffusion Initialization:
 
