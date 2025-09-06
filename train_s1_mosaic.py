@@ -102,14 +102,14 @@ def main(args) -> None:
         shuffle=True,
         drop_last=True,
     )
-    # val_dataset = instantiate_from_config(cfg.dataset.val)
-    # val_loader = DataLoader(
-    #     dataset=val_dataset,
-    #     batch_size=cfg.train.batch_size,
-    #     num_workers=cfg.train.num_workers,
-    #     shuffle=False,
-    #     drop_last=False,
-    # )
+    val_dataset = instantiate_from_config(cfg.dataset.val)
+    val_loader = DataLoader(
+        dataset=val_dataset,
+        batch_size=cfg.train.batch_size,
+        num_workers=cfg.train.num_workers,
+        shuffle=False,
+        drop_last=False,
+    )
     if accelerator.is_local_main_process:
         print(f"Dataset contains {len(dataset):,} images from {dataset.file_list}")
 
@@ -117,8 +117,8 @@ def main(args) -> None:
 
     # Prepare models for training/inference:
     vae.to(device)
-    vae.encoder, opt, loader = accelerator.prepare(
-        vae.encoder, opt, loader
+    vae.encoder, opt, loader, val_loader = accelerator.prepare(
+        vae.encoder, opt, loader, val_loader
     )
     vae.encoder = accelerator.unwrap_model(vae.encoder)
 
@@ -262,82 +262,82 @@ def main(args) -> None:
                 vae.quant_conv.train()
 
             # Evaluate model:
-            # if global_step % cfg.train.val_every == 0:
-            #     vae.encoder.eval() 
-            #     # NOTE: eval() only halts BN stat accumulation & disables dropout. grad computation can still happen! Use with torch.no_grad() around model.
-            #     vae.quant_conv.eval()
-            #     val_loss = []
-            #     val_lpips_loss = []
-            #     val_psnr = []
-            #     val_pbar = tqdm(
-            #         iterable=None,
-            #         disable=not accelerator.is_local_main_process,
-            #         unit="batch",
-            #         total=len(val_loader),
-            #         leave=False,
-            #         desc="Validation",
-            #     )
-            #     for val_batch in val_loader:
-            #         to(val_batch, device)
-            #         val_batch = batch_transform(val_batch)
-            #         val_gt, val_lq, val_prompt, val_gt_path = val_batch
-            #         val_gt = (
-            #             rearrange(val_gt, "b h w c -> b c h w")
-            #             .contiguous()
-            #             .float()
-            #         )
-            #         val_lq = (
-            #             rearrange(val_lq, "b h w c -> b c h w").contiguous().float()
-            #         )
-            #         with torch.no_grad():
+            if global_step % cfg.train.val_every == 0:
+                vae.encoder.eval() 
+                # NOTE: eval() only halts BN stat accumulation & disables dropout. grad computation can still happen! Use with torch.no_grad() around model.
+                vae.quant_conv.eval()
+                val_loss = []
+                val_lpips_loss = []
+                val_psnr = []
+                val_pbar = tqdm(
+                    iterable=None,
+                    disable=not accelerator.is_local_main_process,
+                    unit="batch",
+                    total=len(val_loader),
+                    leave=False,
+                    desc="Validation",
+                )
+                for val_batch in val_loader:
+                    to(val_batch, device)
+                    val_batch = batch_transform(val_batch)
+                    val_gt, val_lq, val_prompt, val_gt_path = val_batch
+                    val_gt = (
+                        rearrange(val_gt, "b h w c -> b c h w")
+                        .contiguous()
+                        .float()
+                    )
+                    val_lq = (
+                        rearrange(val_lq, "b h w c -> b c h w").contiguous().float()
+                    )
+                    with torch.no_grad():
 
-            #             lq_z = vae.encode(val_lq).mode()
-            #             gt_z = vae.encode(val_gt).mode()
-            #             xhat_lq = vae.decode(lq_z)
-            #             xhat_gt = vae.decode(gt_z)
-            #             vloss, vloss_dict = compute_loss(val_gt, gt_z, lq_z, xhat_gt, xhat_lq, 
-            #                                lpips_model, cfg.train.loss_mode, cfg.train.loss_scales)
+                        lq_z = vae.encode(val_lq).mode()
+                        gt_z = vae.encode(val_gt).mode()
+                        xhat_lq = vae.decode(lq_z)
+                        xhat_gt = vae.decode(gt_z)
+                        vloss, vloss_dict = compute_loss(val_gt, gt_z, lq_z, xhat_gt, xhat_lq, 
+                                           lpips_model, cfg.train.loss_mode, cfg.train.loss_scales)
 
-            #             val_psnr.append(
-            #                 calculate_psnr_pt(xhat_lq, val_gt, crop_border=0)
-            #                 .mean()
-            #                 .item()
-            #             )
-            #             val_loss.append(vloss.item())
-            #             val_lpips_loss.append(vloss_dict['perceptual'])
-            #         val_pbar.update(1)
+                        val_psnr.append(
+                            calculate_psnr_pt(xhat_lq, val_gt, crop_border=0)
+                            .mean()
+                            .item()
+                        )
+                        val_loss.append(vloss.item())
+                        val_lpips_loss.append(vloss_dict['perceptual'])
+                    val_pbar.update(1)
 
-            #     val_pbar.close()
-            #     avg_val_loss = (
-            #         accelerator.gather(
-            #             torch.tensor(val_loss, device=device).unsqueeze(0)
-            #         )
-            #         .mean()
-            #         .item()
-            #     )
-            #     avg_val_lpips = (
-            #         accelerator.gather(
-            #             torch.tensor(val_lpips_loss, device=device).unsqueeze(0)
-            #         )
-            #         .mean()
-            #         .item()
-            #     )
-            #     avg_val_psnr = (
-            #         accelerator.gather(
-            #             torch.tensor(val_psnr, device=device).unsqueeze(0)
-            #         )
-            #         .mean()
-            #         .item()
-            #     )
-            #     if accelerator.is_local_main_process:
-            #         for tag, val in [
-            #             ("val/loss", avg_val_loss),
-            #             ("val/lpips", avg_val_lpips),
-            #             ("val/psnr", avg_val_psnr),
-            #         ]:
-            #             writer.add_scalar(tag, val, global_step)
-            #     vae.encoder.train()
-            #     vae.quant_conv.train()
+                val_pbar.close()
+                avg_val_loss = (
+                    accelerator.gather(
+                        torch.tensor(val_loss, device=device).unsqueeze(0)
+                    )
+                    .mean()
+                    .item()
+                )
+                avg_val_lpips = (
+                    accelerator.gather(
+                        torch.tensor(val_lpips_loss, device=device).unsqueeze(0)
+                    )
+                    .mean()
+                    .item()
+                )
+                avg_val_psnr = (
+                    accelerator.gather(
+                        torch.tensor(val_psnr, device=device).unsqueeze(0)
+                    )
+                    .mean()
+                    .item()
+                )
+                if accelerator.is_local_main_process:
+                    for tag, val in [
+                        ("val/loss", avg_val_loss),
+                        ("val/lpips", avg_val_lpips),
+                        ("val/psnr", avg_val_psnr),
+                    ]:
+                        writer.add_scalar(tag, val, global_step)
+                vae.encoder.train()
+                vae.quant_conv.train()
 
             accelerator.wait_for_everyone()
 

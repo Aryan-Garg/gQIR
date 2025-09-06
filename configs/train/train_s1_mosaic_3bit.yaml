@@ -51,7 +51,7 @@ train:
   # experiment directory path
   exp_dir: /home/argar/apgi/gQVR/experiments/mosaic_3bit
   learning_rate: 1e-5
-  batch_size: 8
+  batch_size: 1
   num_workers: 96
   train_steps: 3_000_000
   log_every: 1000
