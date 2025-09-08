@@ -1,11 +1,11 @@
-output_dir: /home/argar/apgi/gQVR/experiments
+output_dir: /home/argar/apgi/gQVR/experiments/s2_mosaic_3bit
 
 
 dataset:
   train:
     batch_size: 2
     dataloader_num_workers: 96
-    target: gqvr.dataset.spc_image_only.SPCDataset
+    target: gqvr.dataset.spc_image_mosaic.SPCDataset_Mosaic
     params:
       file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/combined_dataset.txt
       file_backend_cfg:
@@ -13,13 +13,14 @@ dataset:
       out_size: 512
       crop_type: "center"
       use_hflip: False
+      bits: 3
     batch_transform:
       target: gqvr.dataset.batch_transform.IdentityBatchTransform
 
   val:
     batch_size: 1
     dataloader_num_workers: 96
-    target: gqvr.dataset.spc_image_only.SPCDataset
+    target: gqvr.dataset.spc_image_mosaic.SPCDataset_Mosaic
     params:
       file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/random_val.txt
       file_backend_cfg:
@@ -27,6 +28,7 @@ dataset:
       out_size: 512
       crop_type: "center"
       use_hflip: False
+      bits: 3
     batch_transform:
       target: gqvr.dataset.batch_transform.IdentityBatchTransform
 
@@ -54,7 +56,7 @@ prompt_training: false
 lifting_training: false
 base_model_type: sd2
 base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
-qvae_path: /home/argar/apgi/gQVR/experiments/3bit_vae_10xlr_8xBS/0600000.pt
+qvae_path: /home/argar/apgi/gQVR/experiments/mosaic_3bit/checkpoints/0250000.pt
 model_t: 200
 coeff_t: 200
 lora_rank: 256
