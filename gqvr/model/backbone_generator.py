@@ -34,10 +34,11 @@ class BaseEnhancer:
         self.weight_dtype = torch.bfloat16
         self.device = device
 
-    def init_models(self):
+    def init_models(self, init_vae=True):
         self.init_scheduler()
         self.init_text_models()
-        self.init_vae()
+        if init_vae:
+            self.init_vae()
         self.init_generator()
 
     @overload
