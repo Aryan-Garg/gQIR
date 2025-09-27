@@ -167,19 +167,19 @@ def compute_burst_loss(gt, xhat_lq, lpips_model, scales, loss_mode="gt_perceptua
     # ls_loss = 0.
     gt_loss = 0.
     perceptual_loss = 0.
-    loss_dict = {"mse": mse_loss, "perceptual": perceptual_loss, "gt_loss": gt_loss}
+    loss_dict = {"mse": mse_loss, "perceptual": perceptual_loss, "l1_loss": gt_loss}
     if "mse" in loss_mode:
         mse_loss = scales.mse * F.mse_loss(xhat_lq, gt, reduction="sum")
         loss_dict["mse"] = mse_loss.item()
     elif "gt" in loss_mode:
         gt_loss = scales.l1 * F.l1_loss(xhat_lq, gt, reduction="sum")
-        loss_dict["gt_loss"] = gt_loss.item()
+        loss_dict["l1_loss"] = gt_loss.item()
 
     if "perceptual" in loss_mode:
         perceptual_loss = scales.perceptual * lpips_model(xhat_lq, gt)
         loss_dict["perceptual"] = perceptual_loss.item()
 
-    total_loss = mse_loss + ls_loss + gt_loss + perceptual_loss
+    total_loss = mse_loss + gt_loss + perceptual_loss
     return total_loss, loss_dict
 
 
@@ -490,6 +490,7 @@ def main(args) -> None:
                     burst_latent = sd2_enhancer.forward_generator(sum_merged_frame.half()) # B 4 64 64
                 else:
                     burst_latent = sum_merged_frame
+                torch.save(burst_latent, f"merged_burst_latent_{global_step}.pt")
                 decoded = vae.decode(burst_latent) # B 3 H W
                 # print("[+] Merged latent decoded to image") 
                 
@@ -504,7 +505,6 @@ def main(args) -> None:
 
             pbar.update(1)
             global_step += 1
-            step_flow_loss.append(loss_dict["flow_loss"])
             step_l1_loss.append(loss_dict["l1_loss"])
             step_perceptual_loss.append(loss_dict["perceptual"])
             epoch_loss.append(loss.item())
@@ -539,7 +539,6 @@ def main(args) -> None:
                 step_perceptual_loss.clear()
 
                 if accelerator.is_local_main_process:
-                    writer.add_scalar("train/flow_loss_step", avg_flow_loss, global_step)
                     writer.add_scalar("train/l1_loss_step", avg_l1_loss, global_step)
                     writer.add_scalar("train/perceptual_loss_step", avg_perceptual_loss, global_step)
 
