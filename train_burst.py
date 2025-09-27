@@ -601,9 +601,18 @@ def main(args) -> None:
             # Save checkpoint:
             if global_step % cfg.checkpointing_steps == 0:
                 if accelerator.is_local_main_process:
-                    checkpoint = raft_model.state_dict()
-                    ckpt_path = f"{ckpt_dir}/raft_{global_step:07d}.pt"
-                    torch.save(checkpoint, ckpt_path)
+                    checkpoint_c1 = raft_model_c1.state_dict()
+                    checkpoint_c2 = raft_model_c2.state_dict()
+                    checkpoint_c3 = raft_model_c3.state_dict()
+                    checkpoint_c4 = raft_model_c4.state_dict()
+                    ckpt_path_c1 = f"{ckpt_dir}/raft_c1_{global_step:07d}.pt"
+                    ckpt_path_c2 = f"{ckpt_dir}/raft_c2_{global_step:07d}.pt"
+                    ckpt_path_c3 = f"{ckpt_dir}/raft_c3_{global_step:07d}.pt"
+                    ckpt_path_c4 = f"{ckpt_dir}/raft_c4_{global_step:07d}.pt"
+                    torch.save(checkpoint_c1, ckpt_path_c1)
+                    torch.save(checkpoint_c2, ckpt_path_c2)
+                    torch.save(checkpoint_c3, ckpt_path_c3)
+                    torch.save(checkpoint_c4, ckpt_path_c4)
 
             # Log images
             if global_step % cfg.log_image_steps == 0 or global_step == 1:
@@ -613,8 +622,7 @@ def main(args) -> None:
                 log_gt = (log_gt * 255.).squeeze(0).permute(1, 2, 0).clamp(0, 255).to(torch.uint8).contiguous().numpy()
                 log_pred = (log_pred * 255.).squeeze(0).permute(1, 2, 0).clamp(0, 255).to(torch.uint8).contiguous().numpy()
 
-                save_dir = os.path.join(
-                    cfg.output_dir, "log_videos", f"{global_step:06}")
+                save_dir = os.path.join(cfg.output_dir, "log_imgs", f"{global_step:06}")
                 if not os.path.exists(save_dir):
                     os.makedirs(save_dir)
                 
