@@ -18,3 +18,4 @@ experiments*/**
 checkpoints/**
 dataset_txt_files/**
 evaluation/**
+**/build/**
