@@ -51,6 +51,7 @@ Keep changing the main function for now (make it arg passing only during deploym
 #### Stage 3
 
 ![latent_visualization](assets/latent_viz.png)
+
 Key insight: Second channel of the encoded latents have the most semantic information which enables flow warping to the center channel for burst refinement. However 4x upscaling is still required to compute flow.
 
 > CUDA_VISIBLE_DEVICES=1 python3 train_burst.py --config configs/train/train_burst.yaml
