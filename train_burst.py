@@ -164,23 +164,24 @@ def compute_flow_loss(pred_frames, gt_frames, raft_model):
 def compute_burst_loss(gt, xhat_lq, lpips_model, scales, loss_mode="gt_perceptual"):
     #  "mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual"
     mse_loss = 0.
-    ls_loss = 0.
+    # ls_loss = 0.
     gt_loss = 0.
     perceptual_loss = 0.
-    loss_dict = {"mse": mse_loss, "lsa": ls_loss, "perceptual": perceptual_loss, "gt_loss": gt_loss}
+    loss_dict = {"mse": mse_loss, "perceptual": perceptual_loss, "gt_loss": gt_loss}
     if "mse" in loss_mode:
         mse_loss = scales.mse * F.mse_loss(xhat_lq, gt, reduction="sum")
         loss_dict["mse"] = mse_loss.item()
     elif "gt" in loss_mode:
-        gt_loss = scales.gt * F.l1_loss(xhat_lq, gt, reduction="sum")
+        gt_loss = scales.l1 * F.l1_loss(xhat_lq, gt, reduction="sum")
         loss_dict["gt_loss"] = gt_loss.item()
 
     if "perceptual" in loss_mode:
-        perceptual_loss = scales.perceptual_gt * lpips_model(xhat_lq, gt)
+        perceptual_loss = scales.perceptual * lpips_model(xhat_lq, gt)
         loss_dict["perceptual"] = perceptual_loss.item()
 
     total_loss = mse_loss + ls_loss + gt_loss + perceptual_loss
     return total_loss, loss_dict
+
 
 def compute_stage3_loss(preds, gts, lpips_model, raft_model, loss_mode, scales):
     flow_loss = 0.
@@ -312,7 +313,7 @@ def main(args) -> None:
 
     vae.eval()
     vae.requires_grad_(False)
-
+    vae.to(device)
     # vae.post_quant_conv.to(device)
     # vae.decoder.to(device)
     # def decode_latent(z):
@@ -378,6 +379,8 @@ def main(args) -> None:
     # temp_stabilizer, opt, loader, val_loader = accelerator.prepare(
     #     temp_stabilizer, opt, loader, val_loader
     # )
+
+    raft_model.to(device)
     raft_model, opt, loader = accelerator.prepare(
         raft_model, opt, loader
     )
@@ -427,12 +430,12 @@ def main(args) -> None:
 
             with torch.no_grad():
                 vae_latents = []
-                for t in range(lq.size(1)):
+                for t in range(lqs.size(1)):
                     lq_t = lqs[:, t, ...] # B C H W
-                    latent_t = vae.encode(lq_t.half()).mode() # B 4 64 64
+                    latent_t = vae.encode(lq_t).mode() # B 4 64 64
                     vae_latents.append(latent_t)
                 zs = torch.stack(vae_latents, dim=1) # B T 4 64 64
-                print("[+] All latents from lq video stacked")
+                # print("[+] All latents from lq video stacked")
                 # Free up VRAM
                 del vae_latents, lqs
                 torch.cuda.empty_cache()
@@ -445,16 +448,35 @@ def main(args) -> None:
                         aligned_zs.append(z_center)
                         continue
                     z_t = zs[:, t, ...] # B 4 64 64
+                    ls_in = z_t[:, 1, ...].repeat(1,3,1,1).float()
+                    center_in = z_center[:, 1, ...].repeat(1,3,1,1).float()
+                    ls_in_up = F.interpolate(ls_in, size=(256,256), mode='bilinear', align_corners=False)
+                    center_in_up = F.interpolate(center_in, size=(256,256), mode='bilinear', align_corners=False)
+                    # print(f"[+] Computing flow between frames {t} and {center_t}\nls_in: {ls_in_up.shape}, center_in: {center_in_up.shape}")
                     if t < center_t:
-                        _, flow_fw = raft_model(z_t.float(), z_center.float(), iters=20, test_mode=True) # B 2 64 64
-                        _, flow_bw = raft_model(z_center.float(), z_t.float(), iters=20, test_mode=True) # B 2 64 64
+                        # _, flow_fw = raft_model(ls_in_up, center_in_up, iters=20, test_mode=True) # B 2 64 64 --- NEed this only for flow loss
+                        _, flow_bw = raft_model(center_in_up, ls_in_up, iters=20, test_mode=True) # B 2 64 64
                     else:
-                        _, flow_fw = raft_model(z_center.float(), z_t.float(), iters=20, test_mode=True) # B 2 64 64
-                        _, flow_bw = raft_model(z_t.float(), z_center.float(), iters=20, test_mode=True) # B 2 64 64
+                        # _, flow_fw = raft_model(center_in_up, ls_in_up, iters=20, test_mode=True) # B 2 64 64
+                        _, flow_bw = raft_model(ls_in_up, center_in_up, iters=20, test_mode=True) # B 2 64 64
                     
-                    _, z_t_warped = detect_occlusion(flow_fw, flow_bw, z_t.float())
+                    z_t_warped_c1 = differentiable_warp(F.interpolate(z_center[:, 0, ...].repeat(1,3,1,1).float(), 
+                                                                        size=(256,256), mode='bilinear', align_corners=False), 
+                                                        flow_bw)
+                    z_t_warped_c2 = differentiable_warp(center_in_up, flow_bw)
+                    z_t_warped_c3 = differentiable_warp(F.interpolate(z_center[:, 2, ...].repeat(1,3,1,1).float(), 
+                                                                        size=(256,256), mode='bilinear', align_corners=False), 
+                                                        flow_bw)
+                    z_t_warped_c4 = differentiable_warp(F.interpolate(z_center[:, 3, ...].repeat(1,3,1,1).float(), 
+                                                                        size=(256,256), mode='bilinear', align_corners=False),
+                                                        flow_bw)
+                    z_t_warped = torch.stack([z_t_warped_c1[:, 0, ...], 
+                                            z_t_warped_c2[:, 0, ...], 
+                                            z_t_warped_c3[:, 0, ...], 
+                                            z_t_warped_c4[:, 0, ...]], dim=1)
+                    z_t_warped = F.interpolate(z_t_warped, size=(64,64), mode='bilinear', align_corners=False)
                     aligned_zs.append(z_t_warped)
-                print("[+] All latents aligned to center frame")
+                # print("[+] All latents aligned to center frame")
                 
                 # Merge all aligned latents - weighted sum (further away frames have smaller alpha, since more erroneous flow)
                 sum_merged_frame = torch.zeros_like(z_center)
@@ -462,14 +484,14 @@ def main(args) -> None:
                     # Alpha is inversely proportionate to distance from center. All alphas sum to 1
                     alpha = (center_t - abs(t - center_t)) / zs.size(1)
                     sum_merged_frame = sum_merged_frame + alpha * aligned_zs[t]
-                print("[+] All latents merged to single latent")
+                # print("[+] All latents merged to single latent")
 
                 if cfg.with_unet: 
                     burst_latent = sd2_enhancer.forward_generator(sum_merged_frame.half()) # B 4 64 64
                 else:
-                    burst_latent = sum_merged_frame.half()
+                    burst_latent = sum_merged_frame
                 decoded = vae.decode(burst_latent) # B 3 H W
-                print("[+] Merged latent decoded to image") 
+                # print("[+] Merged latent decoded to image") 
                 
             with torch.amp.autocast("cuda", dtype=torch.float16):
                 loss, loss_dict = compute_burst_loss(center_gt, decoded, lpips_model, scales=cfg.loss_scales, loss_mode="gt_perceptual")
