@@ -17,7 +17,7 @@ dataset:
       precomputed_latents: True
       sliding_window: 28
       chunk_size: 30
-      mosaic: false
+      mosaic: true
 
   val:
     batch_size: 1
@@ -63,7 +63,7 @@ model:
 
 prompt_training: false
 lifting_training: true
-qvae_path: "/media/agarg54/Extreme SSD/weights/gqvr_sd21/3bit_vae_10xlr_8xBS/0600000.pt"
+qvae_path: "/media/agarg54/Extreme SSD/weights/gqvr_sd21/mosaic_3bit_Stage1_SD21/checkpoints/0250000.pt"
 
 # Loss params
 loss_mode: "gt_perceptual" # "flow" must | optional: ["l1", "perceptual"] 
