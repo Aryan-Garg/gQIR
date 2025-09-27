@@ -69,6 +69,7 @@ loss_mode: "gt_perceptual" # "flow" must | optional: ["l1", "perceptual"]
 loss_scales:
   l1: 1.
   perceptual: 10.
+  mse: 0.
 
 
 lr_raft_model: 1e-5
