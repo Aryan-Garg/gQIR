@@ -551,25 +551,19 @@ def main(args) -> None:
 
             # Log images
             if global_step % cfg.log_image_steps == 0 or global_step == 1:
-                N = min(8, gts.size(1))
-                log_gt = (gts[:, :N, ...].cpu() + 1) / 2
-                if accelerator.is_local_main_process: 
-                    with torch.no_grad():
-                        log_zs = stable_zs[:, :N]
-                        log_preds = vae.decode(log_zs.squeeze(0))
-                        log_preds = (log_preds.unsqueeze(0).cpu() + 1) / 2
+                log_gt = (center_gt.cpu() + 1) / 2
+                log_pred = (decoded.squeeze(0).cpu() + 1) / 2
                     
-                    log_gt_arr = (log_gt * 255.).squeeze(0).permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8).contiguous().numpy()
-                    log_pred_arr = (log_preds * 255.).squeeze(0).permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8).contiguous().numpy()
+                log_gt = (log_gt * 255.).squeeze(0).permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8).contiguous().numpy()
+                log_pred = (log_preds * 255.).squeeze(0).permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8).contiguous().numpy()
 
-                    save_dir = os.path.join(
-                        cfg.output_dir, "log_videos", f"{global_step:06}")
-                    if not os.path.exists(save_dir):
-                        os.makedirs(save_dir)
-
-                    for i in range(N):
-                        Image.fromarray(log_gt_arr[i]).save(os.path.join(save_dir, f"gt_frame_{i}.png"))
-                        Image.fromarray(log_pred_arr[i]).save(os.path.join(save_dir, f"pred_frame_{i}.png"))
+                save_dir = os.path.join(
+                    cfg.output_dir, "log_videos", f"{global_step:06}")
+                if not os.path.exists(save_dir):
+                    os.makedirs(save_dir)
+                
+                Image.fromarray(log_gt).save(os.path.join(save_dir, f"gt_frame.png"))
+                Image.fromarray(log_pred).save(os.path.join(save_dir, f"pred_frame.png"))
 
             # Evaluate model:
             # if global_step % cfg.val_every == 0 or global_step == 1:
