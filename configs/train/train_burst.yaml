@@ -1,14 +1,14 @@
-output_dir: /home/argar/apgi/gQVR/experiments_video
+output_dir: /media/agarg54/Extreme SSD/code/gQVR/experiments_burst
 
 dataset:
   batch_transform:
       target: gqvr.dataset.batch_transform.IdentityBatchTransform
   train:
     batch_size: 1
-    num_workers: 96
-    target: gqvr.dataset.spc_video_streaming.SlidingVideoDataset
+    num_workers: 24
+    target: gqvr.dataset.spc_video_streaming.SlidingLatentVideoDataset
     params:
-      file_list: /home/argar/apgi/gQVR/dataset_txt_files/video_dataset_txt_files/combined_video.txt
+      file_list: /media/agarg54/Extreme SSD/video_dataset_txt_files/udm10.txt
       file_backend_cfg:
         target: gqvr.dataset.file_backend.HardDiskBackend
       out_size: 512
@@ -20,8 +20,8 @@ dataset:
 
   val:
     batch_size: 1
-    num_workers: 96
-    target: gqvr.dataset.spc_video_streaming.SlidingVideoDataset
+    num_workers: 24
+    target: gqvr.dataset.spc_video_streaming.SlidingLatentVideoDataset
     params:
       file_list: /home/argar/apgi/gQVR/dataset_txt_files/video_dataset_txt_files/saved_latents_vids_val.txt
       file_backend_cfg:
