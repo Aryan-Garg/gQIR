@@ -329,15 +329,26 @@ def main(args) -> None:
         dropout = False
     raft_args = RAFT_args()
 
-    raft_model = RAFT(raft_args)
+    # raft_model = RAFT(raft_args)
+    raft_model_c1 = RAFT(raft_args)
+    raft_model_c2 = RAFT(raft_args)
+    raft_model_c3 = RAFT(raft_args)
+    raft_model_c4 = RAFT(raft_args)
+
     raft_things_dict = torch.load("./pretrained_ckpts/models/raft-things.pth")
     corrected_state_dict = {}
     for k, v in raft_things_dict.items():
         k2 = ".".join(k.split(".")[1:])
         corrected_state_dict[k2] = v
+    raft_model_c1.load_state_dict(corrected_state_dict)
+    raft_model_c2.load_state_dict(corrected_state_dict)
+    raft_model_c3.load_state_dict(corrected_state_dict)
+    raft_model_c4.load_state_dict(corrected_state_dict)
 
-    raft_model.load_state_dict(corrected_state_dict)
-    raft_model.train().requires_grad_(True).to(device)
+    raft_model_c1.train().requires_grad_(True).to(device)
+    raft_model_c2.train().requires_grad_(True).to(device)
+    raft_model_c3.train().requires_grad_(True).to(device)
+    raft_model_c4.train().requires_grad_(True).to(device)
 
     if cfg.with_unet:
         sd2_enhancer = SD2Enhancer(
@@ -353,7 +364,19 @@ def main(args) -> None:
         sd2_enhancer.init_models(init_vae = False)
 
     # Setup optimizer:
-    opt = torch.optim.AdamW(raft_model.parameters(), 
+    opt_c1 = torch.optim.AdamW(raft_model_c1.parameters(), 
+        lr=cfg.lr_raft_model, 
+        **cfg.opt_kwargs)
+
+    opt_c2 = torch.optim.AdamW(raft_model_c1.parameters(), 
+        lr=cfg.lr_raft_model, 
+        **cfg.opt_kwargs)
+
+    opt_c3 = torch.optim.AdamW(raft_model_c1.parameters(), 
+        lr=cfg.lr_raft_model, 
+        **cfg.opt_kwargs)
+
+    opt_c4 = torch.optim.AdamW(raft_model_c1.parameters(), 
         lr=cfg.lr_raft_model, 
         **cfg.opt_kwargs)
 
@@ -380,11 +403,13 @@ def main(args) -> None:
     #     temp_stabilizer, opt, loader, val_loader
     # )
 
-    raft_model.to(device)
-    raft_model, opt, loader = accelerator.prepare(
-        raft_model, opt, loader
+    raft_model_c1, raft_model_c2, raft_model_c3, raft_model_c4, opt_c1, opt_c2, opt_c3, opt_c4, loader = accelerator.prepare(
+        raft_model_c1, raft_model_c2, raft_model_c3, raft_model_c4, opt_c1, opt_c2, opt_c3, opt_c4, loader
     )
-    raft_model = accelerator.unwrap_model(raft_model)
+    raft_model_c1 = accelerator.unwrap_model(raft_model_c1)
+    raft_model_c2 = accelerator.unwrap_model(raft_model_c2)
+    raft_model_c3 = accelerator.unwrap_model(raft_model_c3)
+    raft_model_c4 = accelerator.unwrap_model(raft_model_c4)
 
     # Variables for monitoring/logging purposes:
     global_step = 0
@@ -441,35 +466,54 @@ def main(args) -> None:
                 torch.cuda.empty_cache()
                 # Warp all latents to center latent using raft
                 aligned_zs = []
+                # print(f"[+] Total frames in burst: {zs.size(1)}")
                 center_t = zs.size(1) // 2
                 z_center = zs[:, center_t, ...] # B 4 64 64
+                if global_step % 100 == 0:
+                    torch.save(z_center, f"center_latent_{global_step}.pt")
                 for t in range(zs.size(1)):
                     if t == center_t:
                         aligned_zs.append(z_center)
                         continue
                     z_t = zs[:, t, ...] # B 4 64 64
-                    ls_in = z_t[:, 1, ...].repeat(1,3,1,1).float()
-                    center_in = z_center[:, 1, ...].repeat(1,3,1,1).float()
-                    ls_in_up = F.interpolate(ls_in, size=(256,256), mode='bilinear', align_corners=False)
-                    center_in_up = F.interpolate(center_in, size=(256,256), mode='bilinear', align_corners=False)
+
+                    ls_in_c1 = z_t[:, 0, ...].repeat(1,3,1,1).float()
+                    ls_in_c2 = z_t[:, 1, ...].repeat(1,3,1,1).float()
+                    ls_in_c3 = z_t[:, 2, ...].repeat(1,3,1,1).float()
+                    ls_in_c4 = z_t[:, 3, ...].repeat(1,3,1,1).float()
+                    center_in_c1 = z_center[:, 0, ...].repeat(1,3,1,1).float()
+                    center_in_c2 = z_center[:, 0, ...].repeat(1,3,1,1).float()
+                    center_in_c3 = z_center[:, 0, ...].repeat(1,3,1,1).float()
+                    center_in_c4 = z_center[:, 0, ...].repeat(1,3,1,1).float()
+
+                    ls_in_up_c1 = F.interpolate(ls_in_c1, size=(256,256), mode='bilinear', align_corners=False)
+                    ls_in_up_c2 = F.interpolate(ls_in_c2, size=(256,256), mode='bilinear', align_corners=False)
+                    ls_in_up_c3 = F.interpolate(ls_in_c3, size=(256,256), mode='bilinear', align_corners=False)
+                    ls_in_up_c4 = F.interpolate(ls_in_c4, size=(256,256), mode='bilinear', align_corners=False)
+                    center_in_up_c1 = F.interpolate(center_in_c1, size=(256,256), mode='bilinear', align_corners=False)
+                    center_in_up_c2 = F.interpolate(center_in_c2, size=(256,256), mode='bilinear', align_corners=False)
+                    center_in_up_c3 = F.interpolate(center_in_c3, size=(256,256), mode='bilinear', align_corners=False)
+                    center_in_up_c4 = F.interpolate(center_in_c4, size=(256,256), mode='bilinear', align_corners=False)
+
                     # print(f"[+] Computing flow between frames {t} and {center_t}\nls_in: {ls_in_up.shape}, center_in: {center_in_up.shape}")
                     if t < center_t:
                         # _, flow_fw = raft_model(ls_in_up, center_in_up, iters=20, test_mode=True) # B 2 64 64 --- NEed this only for flow loss
-                        _, flow_bw = raft_model(center_in_up, ls_in_up, iters=20, test_mode=True) # B 2 64 64
+                        _, flow_bw_c1 = raft_model_c1(center_in_up_c1, ls_in_up_c1, iters=20, test_mode=True) # B 2 64 64
+                        _, flow_bw_c2 = raft_model_c2(center_in_up_c2, ls_in_up_c2, iters=20, test_mode=True) # B 2 64 64
+                        _, flow_bw_c3 = raft_model_c3(center_in_up_c3, ls_in_up_c3, iters=20, test_mode=True) # B 2 64 64
+                        _, flow_bw_c4 = raft_model_c4(center_in_up_c4, ls_in_up_c4, iters=20, test_mode=True) # B 2 64 64
                     else:
                         # _, flow_fw = raft_model(center_in_up, ls_in_up, iters=20, test_mode=True) # B 2 64 64
-                        _, flow_bw = raft_model(ls_in_up, center_in_up, iters=20, test_mode=True) # B 2 64 64
+                        _, flow_bw_c1 = raft_model_c1(ls_in_up_c1, center_in_up_c1, iters=20, test_mode=True) # B 2 64 64
+                        _, flow_bw_c2 = raft_model_c2(ls_in_up_c2, center_in_up_c2, iters=20, test_mode=True) # B 2 64 64
+                        _, flow_bw_c3 = raft_model_c3(ls_in_up_c3, center_in_up_c3, iters=20, test_mode=True) # B 2 64 64
+                        _, flow_bw_c4 = raft_model_c4(ls_in_up_c4, center_in_up_c4, iters=20, test_mode=True) # B 2 64 64
                     
-                    z_t_warped_c1 = differentiable_warp(F.interpolate(z_center[:, 0, ...].repeat(1,3,1,1).float(), 
-                                                                        size=(256,256), mode='bilinear', align_corners=False), 
-                                                        flow_bw)
-                    z_t_warped_c2 = differentiable_warp(center_in_up, flow_bw)
-                    z_t_warped_c3 = differentiable_warp(F.interpolate(z_center[:, 2, ...].repeat(1,3,1,1).float(), 
-                                                                        size=(256,256), mode='bilinear', align_corners=False), 
-                                                        flow_bw)
-                    z_t_warped_c4 = differentiable_warp(F.interpolate(z_center[:, 3, ...].repeat(1,3,1,1).float(), 
-                                                                        size=(256,256), mode='bilinear', align_corners=False),
-                                                        flow_bw)
+                    z_t_warped_c1 = differentiable_warp(center_in_up_c1, flow_bw_c1)
+                    z_t_warped_c2 = differentiable_warp(center_in_up_c2, flow_bw_c2)
+                    z_t_warped_c3 = differentiable_warp(center_in_up_c3, flow_bw_c3)
+                    z_t_warped_c4 = differentiable_warp(center_in_up_c4, flow_bw_c4)
+
                     z_t_warped = torch.stack([z_t_warped_c1[:, 0, ...], 
                                             z_t_warped_c2[:, 0, ...], 
                                             z_t_warped_c3[:, 0, ...], 
@@ -490,7 +534,10 @@ def main(args) -> None:
                     burst_latent = sd2_enhancer.forward_generator(sum_merged_frame.half()) # B 4 64 64
                 else:
                     burst_latent = sum_merged_frame
-                torch.save(burst_latent, f"merged_burst_latent_{global_step}.pt")
+                
+                if global_step % 100 == 0:
+                    torch.save(burst_latent, f"merged_burst_latent_{global_step}.pt")
+
                 decoded = vae.decode(burst_latent) # B 3 H W
                 # print("[+] Merged latent decoded to image") 
                 
@@ -499,8 +546,17 @@ def main(args) -> None:
             
 
             accelerator.backward(loss)
-            opt.step()
-            opt.zero_grad()
+            opt_c1.step()
+            opt_c1.zero_grad()
+
+            opt_c2.step()
+            opt_c2.zero_grad()
+
+            opt_c3.step()
+            opt_c3.zero_grad()
+
+            opt_c4.step()
+            opt_c4.zero_grad()
             accelerator.wait_for_everyone()
 
             pbar.update(1)
@@ -554,8 +610,8 @@ def main(args) -> None:
                 log_gt = (center_gt.cpu() + 1) / 2
                 log_pred = (decoded.squeeze(0).cpu() + 1) / 2
                     
-                log_gt = (log_gt * 255.).squeeze(0).permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8).contiguous().numpy()
-                log_pred = (log_preds * 255.).squeeze(0).permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8).contiguous().numpy()
+                log_gt = (log_gt * 255.).squeeze(0).permute(1, 2, 0).clamp(0, 255).to(torch.uint8).contiguous().numpy()
+                log_pred = (log_pred * 255.).squeeze(0).permute(1, 2, 0).clamp(0, 255).to(torch.uint8).contiguous().numpy()
 
                 save_dir = os.path.join(
                     cfg.output_dir, "log_videos", f"{global_step:06}")
