@@ -48,7 +48,13 @@ Keep changing the main function for now (make it arg passing only during deploym
 
 > python3 train_sd2GAN.py --config configs/train/train_sd2gan.yaml
 
-#### Stage 3 - Image Prior Lifting and Stabilization
+#### Stage 3
+
+> CUDA_VISIBLE_DEVICES=1 python3 train_burst.py --config configs/train/train_burst.yaml
+
+#### Stage 4 - Image Prior Lifting to Video Stabilization Model
+
+Under construction
 
 **Precomputing latents:**
 
