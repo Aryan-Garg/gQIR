@@ -350,6 +350,9 @@ def main(args) -> None:
     raft_model_c3.train().requires_grad_(True).to(device)
     raft_model_c4.train().requires_grad_(True).to(device)
 
+    print(f"\n[~] All trainable RAFT model parameters: {4*(sum(p.numel() for p in raft_model_c1.parameters() if p.requires_grad)) / 1e6:.2f}M")
+    print(f"[~] All frozen VAE model parameters: {sum(p.numel() for p in vae.parameters()) / 1e6:.2f}M\n")
+
     if cfg.with_unet:
         sd2_enhancer = SD2Enhancer(
             base_model_path     =   cfg.base_model_path,
