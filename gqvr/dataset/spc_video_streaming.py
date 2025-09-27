@@ -31,7 +31,8 @@ class SlidingLatentVideoDataset(IterableDataset):
                     use_hflip: bool,
                     sliding_window: int,
                     chunk_size: int,
-                    precomputed_latents: bool = False) -> "SlidingLatentVideoDataset":
+                    precomputed_latents: bool = False,
+                    mosaic: bool = True) -> "SlidingLatentVideoDataset":
         """
         Args:
             video_files (list of dict): each dict must contain:
@@ -52,6 +53,7 @@ class SlidingLatentVideoDataset(IterableDataset):
         self.sliding_window = sliding_window
         self.chunk_size = chunk_size
         self.bits = 3
+        self.mosaic = mosaic
         print(f"[+] Sim bits = {self.bits}")
 
 
@@ -89,7 +91,10 @@ class SlidingLatentVideoDataset(IterableDataset):
             # NOTE: No motion-blur. Assumes SPC-fps >>> scene motion
             N = 2**self.bits - 1
             for i in range(N): # 3-bit (2**3 - 1)
-                img_lq_sum = img_lq_sum + self.get_mosaic(self.generate_spc_from_gt(image))
+                if self.mosaic:
+                    img_lq_sum = img_lq_sum + self.get_mosaic(self.generate_spc_from_gt(image))
+                else:
+                    img_lq_sum = img_lq_sum + self.generate_spc_from_gt(image)
             img_lq = img_lq_sum / (1.0*N)
             lqs.append(img_lq)
             gts.append(image)
@@ -169,12 +174,13 @@ class SlidingLatentVideoDataset(IterableDataset):
             lqs = ((lqs*2) - 1).astype(np.float32)
             
             # Sliding window
+            chunk_size = min(self.chunk_size, gts.shape[0])
             T_total = gts.shape[0]
-            for start_idx in range(0, T_total - self.chunk_size + 1, self.sliding_window): # Currently manually set in the init fn
-                gt_chunk = gts[start_idx:start_idx + self.chunk_size] 
-                lq_chunk = lqs[start_idx:start_idx + self.chunk_size]
+            for start_idx in range(0, T_total -  chunk_size + 1, self.sliding_window): # Currently manually set in the init fn
+                gt_chunk = gts[start_idx:start_idx + chunk_size] 
+                lq_chunk = lqs[start_idx:start_idx + chunk_size]
                 if self.precomputed_latents:
-                    chunk = latents[start_idx:start_idx + self.chunk_size]  # [T, C, H, W]
+                    chunk = latents[start_idx:start_idx + chunk_size]  # [T, C, H, W]
                     yield {"latents": chunk,        # [T, C, H, W]
                             "gts": gt_chunk, 
                             "lqs": lq_chunk}  # [T, H, W, C], [-1, 1], float32
