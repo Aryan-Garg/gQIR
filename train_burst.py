@@ -432,6 +432,7 @@ def main(args) -> None:
                     latent_t = vae.encode(lq_t.half()).mode() # B 4 64 64
                     vae_latents.append(latent_t)
                 zs = torch.stack(vae_latents, dim=1) # B T 4 64 64
+                print("[+] All latents from lq video stacked")
                 # Free up VRAM
                 del vae_latents, lqs
                 torch.cuda.empty_cache()
@@ -453,6 +454,7 @@ def main(args) -> None:
                     
                     _, z_t_warped = detect_occlusion(flow_fw, flow_bw, z_t.float())
                     aligned_zs.append(z_t_warped)
+                print("[+] All latents aligned to center frame")
                 
                 # Merge all aligned latents - weighted sum (further away frames have smaller alpha, since more erroneous flow)
                 sum_merged_frame = torch.zeros_like(z_center)
@@ -460,22 +462,25 @@ def main(args) -> None:
                     # Alpha is inversely proportionate to distance from center. All alphas sum to 1
                     alpha = (center_t - abs(t - center_t)) / zs.size(1)
                     sum_merged_frame = sum_merged_frame + alpha * aligned_zs[t]
-                
+                print("[+] All latents merged to single latent")
+
                 if cfg.with_unet: 
                     burst_latent = sd2_enhancer.forward_generator(sum_merged_frame.half()) # B 4 64 64
                 else:
                     burst_latent = sum_merged_frame.half()
                 decoded = vae.decode(burst_latent) # B 3 H W
+                print("[+] Merged latent decoded to image") 
                 
             with torch.amp.autocast("cuda", dtype=torch.float16):
                 loss, loss_dict = compute_burst_loss(center_gt, decoded, lpips_model, scales=cfg.loss_scales, loss_mode="gt_perceptual")
-                
+            
 
             accelerator.backward(loss)
             opt.step()
             opt.zero_grad()
             accelerator.wait_for_everyone()
 
+            pbar.update(1)
             global_step += 1
             step_flow_loss.append(loss_dict["flow_loss"])
             step_l1_loss.append(loss_dict["l1_loss"])
