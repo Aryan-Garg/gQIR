@@ -30,8 +30,8 @@ dataset:
       crop_type: "center"
       use_hflip: False
       precomputed_latents: True
-      sliding_window: 3
-      chunk_size: 4
+      sliding_window: 28
+      chunk_size: 30
     batch_transform:
       target: gqvr.dataset.batch_transform.IdentityBatchTransform
 

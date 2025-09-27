@@ -47,7 +47,7 @@ class SPCVideoDataset(data.Dataset):
         self.crop_type = crop_type
         self.use_hflip = use_hflip # No need for 1.5M big dataset
         assert self.crop_type in ["none", "center", "random"]
-        self.HARDDISK_DIR = "/mnt/disks/behemoth/datasets/"
+        self.HARDDISK_DIR = "/media/agarg54/Extreme SSD/"
         self.precomputed_latents = precomputed_latents
 
 
@@ -55,7 +55,7 @@ class SPCVideoDataset(data.Dataset):
         gt_images = []
         latents = []
         # print(f"Loading GT video from {video_path}")
-        max_frames = 4
+        max_frames = 30
         frame_counter = 0
         # print(f"Extracting from {video_path}")
         for img_name in sorted(os.listdir(video_path)):
@@ -90,9 +90,36 @@ class SPCVideoDataset(data.Dataset):
                     frame_counter += 1
                     if frame_counter == 64:
                         break
+            else:
+                if img_name.endswith(".png"):
+                    image_path = os.path.join(video_path, img_name)
+                    # print(f"Loading {image_path}")
+                    image = Image.open(image_path).convert("RGB")
+                    # print(f"Loaded GT image size: {image.size}")
+                    if self.crop_type != "none":
+                        if image.height == self.out_size and image.width == self.out_size:
+                            image = np.array(image)
+                        else:
+                            if self.crop_type == "center":
+                                image = center_crop_arr(image, self.out_size)
+                            elif self.crop_type == "random":
+                                image = random_crop_arr(image, self.out_size, min_crop_frac=0.7)
+                    else:
+                        assert image.height == self.out_size and image.width == self.out_size
+                        image = np.array(image)
+                        # hwc, rgb, 0,255, uint8
+            
+                    gt_images.append(image)
+                    frame_counter += 1
+                    if frame_counter == 64:
+                        break
         
-        start_rdx = random.randint(0, len(latents)-max_frames-1)
-        latents = latents[start_rdx : start_rdx+max_frames]
+        if self.precomputed_latents:
+            start_rdx = random.randint(0, len(latents)-max_frames-1)
+            latents = latents[start_rdx : start_rdx+max_frames]
+        else:
+            start_rdx = random.randint(0, len(gt_images)-max_frames-1)
+
         gt_images = gt_images[start_rdx: start_rdx+max_frames]
 
         if self.precomputed_latents:
@@ -187,11 +214,12 @@ class SPCVideoDataset(data.Dataset):
 if __name__ == "__main__":
     # Testing/Example usage
     dataset = SPCVideoDataset(
-        file_list="/home/argar/apgi/gQVR/dataset_txt_files/udm10_video.txt",
+        file_list="/media/agarg54/Extreme SSD/video_dataset_txt_files/udm10.txt",
         file_backend_cfg={"target": "gqvr.dataset.file_backend.HardDiskBackend"},
         out_size=512,
         crop_type="center",
         use_hflip=False,
+        precomputed_latents=False
     )
     print(f"Complete Dataset length: {len(dataset)}")
     sample = next(iter(dataset))

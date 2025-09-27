@@ -433,7 +433,7 @@ def main(args) -> None:
                     vae_latents.append(latent_t)
                 zs = torch.stack(vae_latents, dim=1) # B T 4 64 64
                 # Free up VRAM
-                del vae_latents, lq
+                del vae_latents, lqs
                 torch.cuda.empty_cache()
                 # Warp all latents to center latent using raft
                 aligned_zs = []

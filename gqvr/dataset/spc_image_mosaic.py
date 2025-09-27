@@ -45,7 +45,7 @@ class SPCDataset_Mosaic(data.Dataset):
         self.crop_type = crop_type
         self.use_hflip = use_hflip # No need for 1.5M big dataset
         assert self.crop_type in ["none", "center", "random"]
-        self.HARDDISK_DIR = "/mnt/disks/behemoth/datasets/"
+        self.HARDDISK_DIR = "/media/agarg54/Extreme SSD/"
         self.bits = bits
         print(f"[+] Sim bits = {self.bits}")
 
