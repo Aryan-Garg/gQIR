@@ -164,29 +164,47 @@ def get_mosaic(img):
 
 import piq
 def compute_full_reference_metrics(gt_img, out_img):
-    # PSNR
-    # SSIM  
-    # LPIPS
+    # PSNR SSIM LPIPS
     
     # print(gt_img.shape, out_img.shape)
     # print(gt_img.max(), out_img.max(), gt_img.min(), out_img.min())
+    # print("Full-reference scores:")
     psnr = piq.psnr(out_img, gt_img, data_range=1., reduction='none')
-    print(f"PSNR: {psnr.item():.2f} dB")
+    # print(f"PSNR: {psnr.item():.2f} dB")
 
     ssim = piq.ssim(out_img, gt_img, data_range=1.) 
-    print(f"SSIM: {ssim.item():.4f}")
+    # print(f"SSIM: {ssim.item():.4f}")
 
     lpips = piq.LPIPS(reduction='none')(out_img, gt_img)
-    print(f"LPIPS: {lpips.item():.4f}")
+    # print(f"LPIPS: {lpips.item():.4f}")
+    return psnr.item(), ssim.item(), lpips.item()
 
-
+import pyiqa
+# from DeQAScore.src import Scorer
 def compute_no_reference_metrics(out_img):
-    # ManIQA
-    # DeQA
-    # MUSIQ
-    # ClipIQA
-    pass
+    # center crop to 224x224 for no-reference metrics
+    _, _, h, w = out_img.shape
+    top = (h - 224) // 2
+    left = (w - 224) // 2
+    out_img = out_img[:, :, top:top+224, left:left+224]
 
+    # ManIQA DeQA MUSIQ ClipIQA
+    maniqa = pyiqa.create_metric('maniqa', device=torch.device("cuda:1"))
+    clipiqa = pyiqa.create_metric('clipiqa', device=torch.device("cuda:1"))
+    musiq = pyiqa.create_metric('musiq', device=torch.device("cuda:1"))
+    # deqa = Scorer(model_type='deqa', device=torch.device("cuda:1"))
+
+    maniqa_score = maniqa(out_img).item()
+    clipiqa_score = clipiqa(out_img).item()
+    musiq_score = musiq(out_img).item()
+    # deqa_score = deqa.score([Image.fromarray((out_img.squeeze(0).permute(1,2,0).cpu().numpy()*255).astype(np.uint8))])[0]
+
+    # print("No-reference scores:")
+    # print(f"ManIQA: {maniqa_score:.4f}")
+    # print(f"ClipIQA: {clipiqa_score:.4f}")
+    # print(f"MUSIQ: {musiq_score:.4f}")
+    # print(f"DeQA: {deqa_score:.4f}")
+    return maniqa_score, clipiqa_score, musiq_score #, deqa_score
 
 def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3):
     if gt_image_path:
@@ -217,8 +235,8 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3):
     gt_img_torch = to_tensor(result[0]).unsqueeze(0)
     out_img_torch = to_tensor(result[-1]).unsqueeze(0)
 
-    compute_full_reference_metrics(gt_img_torch, out_img_torch)
-    # compute_no_reference_metrics(result[-1])
+    psnr, ssim, lpips = compute_full_reference_metrics(gt_img_torch, out_img_torch)
+    maniqa, clipiqa, musiq = compute_no_reference_metrics(out_img_torch)
     # gt_img_pil = Image.fromarray(gt_img.astype(np.uint8))
     # lq_img_pil = Image.fromarray((img_lq*255).astype(np.uint8))
     # reconstructed_pil = result[-1]
@@ -230,6 +248,7 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3):
     # if len(result[-2]) > 50:
     #     with open(os.path.join(output_dir, f"prompt_{}.txt"), "w") as f:
     #         f.write(result[-2])
+    return psnr, ssim, lpips, maniqa, clipiqa, musiq
 
 
 
@@ -316,13 +335,35 @@ if __name__ == "__main__":
         raise ValueError(config.base_model_type)
 
     prefix_path = "/media/agarg54/Extreme SSD/"
-    with open("/media/agarg54/Extreme SSD/dataset_txt_files/udm_test.txt", "r") as f:
+    psnr_list = []
+    ssim_list = []
+    lpips_list = []
+    maniqa_list = []
+    clipiqa_list = []
+    musiq_list = []
+    with open("/media/agarg54/Extreme SSD/dataset_txt_files/full_test_set.txt", "r") as f:
         lines = f.readlines()
-        for line in lines:
+        for line in tqdm(lines):
             gt_image_path = os.path.join(prefix_path, line.strip()[2:])
-            eval_single_image(gt_image_path = gt_image_path)
-        
-        
+            metrics = eval_single_image(gt_image_path = gt_image_path)
+            psnr_list.append(metrics[0])
+            ssim_list.append(metrics[1])
+            lpips_list.append(metrics[2])
+            maniqa_list.append(metrics[3])
+            clipiqa_list.append(metrics[4])
+            musiq_list.append(metrics[5])
+
+    with open("./evaluations/full_test_SD21-3bit-Stage2.txt", "w") as f:
+        f.write("Overall scores on full_test_set:\n")
+        f.write("---------- FR scores ----------\n")
+        f.write(f"Average PSNR: {np.mean(psnr_list):.2f} dB\n")
+        f.write(f"Average SSIM: {np.mean(ssim_list):.4f}\n")
+        f.write(f"Average LPIPS: {np.mean(lpips_list):.4f}\n")
+        f.write("---------- NR scores ----------\n")
+        f.write(f"Average ManIQA: {np.mean(maniqa_list):.4f}\n")
+        f.write(f"Average ClipIQA: {np.mean(clipiqa_list):.4f}\n")
+        f.write(f"Average MUSIQ: {np.mean(musiq_list):.4f}\n")
+
     # save_all_video_Gprocessed_latents_to_disk(args.ds_txt)
         
     
