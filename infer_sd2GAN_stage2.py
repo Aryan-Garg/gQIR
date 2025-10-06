@@ -117,7 +117,78 @@ def eval_udm():
                     f.write(used_prompt)
 
 
-def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=1):
+def get_mosaic(img):
+    """
+        Convert a demosaiced RGB image (HxWx3) into an RGGB Bayer mosaic.
+    """
+    R = img[:, :, 0]
+    G = img[:, :, 1]
+    B = img[:, :, 2]
+    bayer = np.zeros_like(img)
+    bayer_pattern_type = random.choice(["RGGB", "GRBG", "BGGR", "GBRG"])
+    if bayer_pattern_type == "RGGB":
+        # Red
+        bayer[0::2, 0::2, 0] = R[0::2, 0::2]
+        # Green
+        bayer[0::2, 1::2, 1] = G[0::2, 1::2]
+        bayer[1::2, 0::2, 1] = G[1::2, 0::2]
+        # Blue
+        bayer[1::2, 1::2, 2] = B[1::2, 1::2]
+    elif bayer_pattern_type == "GRBG":
+        # Red
+        bayer[0::2, 1::2, 0] = R[0::2, 1::2]
+        # Green 
+        bayer[0::2, 0::2, 1] = G[0::2, 0::2]
+        bayer[1::2, 1::2, 1] = G[1::2, 1::2]
+        # Blue
+        bayer[1::2, 0::2, 2] = B[1::2, 0::2]
+        
+    elif bayer_pattern_type == "BGGR":
+        # Blue
+        bayer[0::2, 0::2, 2] = B[0::2, 0::2]
+        # Green
+        bayer[0::2, 1::2, 1] = G[0::2, 1::2]
+        bayer[1::2, 0::2, 1] = G[1::2, 0::2]
+        # Red
+        bayer[1::2, 1::2, 0] = R[1::2, 1::2]
+    
+    else: # GBRG
+        # Green
+        bayer[0::2, 0::2, 1] = G[0::2, 0::2]
+        bayer[1::2, 1::2, 1] = G[1::2, 1::2]
+        # Blue
+        bayer[0::2, 1::2, 2] = B[0::2, 1::2]
+        # Red
+        bayer[1::2, 0::2, 0] = R[1::2, 0::2]
+    return bayer
+
+import piq
+def compute_full_reference_metrics(gt_img, out_img):
+    # PSNR
+    # SSIM  
+    # LPIPS
+    
+    # print(gt_img.shape, out_img.shape)
+    # print(gt_img.max(), out_img.max(), gt_img.min(), out_img.min())
+    psnr = piq.psnr(out_img, gt_img, data_range=1., reduction='none')
+    print(f"PSNR: {psnr.item():.2f} dB")
+
+    ssim = piq.ssim(out_img, gt_img, data_range=1.) 
+    print(f"SSIM: {ssim.item():.4f}")
+
+    lpips = piq.LPIPS(reduction='none')(out_img, gt_img)
+    print(f"LPIPS: {lpips.item():.4f}")
+
+
+def compute_no_reference_metrics(out_img):
+    # ManIQA
+    # DeQA
+    # MUSIQ
+    # ClipIQA
+    pass
+
+
+def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3):
     if gt_image_path:
         gt_img = Image.open(gt_image_path)
         gt_img = gt_img.convert("RGB")
@@ -128,7 +199,7 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=1):
             N = 2**bits - 1
             img_lq_sum = np.zeros_like(gt_img, dtype=np.float32)
             for i in range(N): # 4-bit (2**4 - 1)
-                img_lq_sum = img_lq_sum + generate_spc_from_gt(gt_img)
+                img_lq_sum = img_lq_sum + get_mosaic(generate_spc_from_gt(gt_img))
             img_lq = img_lq_sum / (1.0*N)
         else:
             img_lq = Image.open(lq_image_path)
@@ -141,17 +212,24 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=1):
 
     # Save results
     output_dir = "./evaluation/"
-    gt_img_pil = Image.fromarray(gt_img.astype(np.uint8))
-    lq_img_pil = Image.fromarray((img_lq*255).astype(np.uint8))
-    reconstructed_pil = result[-1]
-    zero_filled_str = str(i+1).zfill(3)
+    os.makedirs(output_dir, exist_ok=True)
 
-    gt_img_pil.save(os.path.join(output_dir, f"si_gt_{zero_filled_str}.png"))
-    lq_img_pil.save(os.path.join(output_dir, f"si_lq_{zero_filled_str}.png"))
-    reconstructed_pil.save(os.path.join(output_dir, f"si_out_{zero_filled_str}.png"))
-    if len(result[-2]) > 50:
-        with open(os.path.join(output_dir, f"prompt_{zero_filled_str}.txt"), "w") as f:
-            f.write(result[-2])
+    gt_img_torch = to_tensor(result[0]).unsqueeze(0)
+    out_img_torch = to_tensor(result[-1]).unsqueeze(0)
+
+    compute_full_reference_metrics(gt_img_torch, out_img_torch)
+    # compute_no_reference_metrics(result[-1])
+    # gt_img_pil = Image.fromarray(gt_img.astype(np.uint8))
+    # lq_img_pil = Image.fromarray((img_lq*255).astype(np.uint8))
+    # reconstructed_pil = result[-1]
+
+    # gt_img_pil.save(os.path.join(output_dir, f"gt_3bit_color_{}.png"))
+    # lq_img_pil.save(os.path.join(output_dir, f"lq_3bit_color_{}.png"))
+    # reconstructed_pil.save(os.path.join(output_dir, f"out_3bit_color{}.png"))
+
+    # if len(result[-2]) > 50:
+    #     with open(os.path.join(output_dir, f"prompt_{}.txt"), "w") as f:
+    #         f.write(result[-2])
 
 
 
@@ -198,7 +276,7 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--internvl_caption", action="store_true")
     parser.add_argument("--max_size", type=str, default="512,512", help="Comma-seperated image size")
-    parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument("--device", type=str, default="cuda:1", help="Device to run the model on")
     parser.add_argument("--ds_txt", type=str)
     args = parser.parse_args()
 
@@ -237,8 +315,15 @@ if __name__ == "__main__":
     else:
         raise ValueError(config.base_model_type)
 
-    # eval_single_image(gt_image_path = "/mnt/disks/behemoth/datasets/DIV2K/DIV2K_train_HR/0243.png")
-    save_all_video_Gprocessed_latents_to_disk(args.ds_txt)
+    prefix_path = "/media/agarg54/Extreme SSD/"
+    with open("/media/agarg54/Extreme SSD/dataset_txt_files/udm_test.txt", "r") as f:
+        lines = f.readlines()
+        for line in lines:
+            gt_image_path = os.path.join(prefix_path, line.strip()[2:])
+            eval_single_image(gt_image_path = gt_image_path)
+        
+        
+    # save_all_video_Gprocessed_latents_to_disk(args.ds_txt)
         
     
  
