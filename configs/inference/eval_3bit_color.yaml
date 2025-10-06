@@ -1,0 +1,32 @@
+# qVAE config:    
+model:
+  vae_cfg:
+    qvae_path: /media/agarg54/Extreme SSD/weights/gqvr_sd21/mosaic_3bit_Stage1_SD21/checkpoints/0250000.pt
+    embed_dim: 4
+    ddconfig:
+      double_z: true
+      z_channels: 4
+      resolution: 512
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult:
+      - 1
+      - 2
+      - 4
+      - 4
+      num_res_blocks: 2
+      attn_resolutions: []
+      dropout: 0.0
+
+# prompt_training: true
+base_model_type: sd2
+base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
+weight_path: /media/agarg54/Extreme SSD/weights/gqvr_sd21/mosaic_3bit_Stage2_SD21/checkpoints/checkpoint-10000/state_dict.pth
+qvae_path: /media/agarg54/Extreme SSD/weights/gqvr_sd21/mosaic_3bit_Stage1_SD21/checkpoints/0250000.pt
+model_t: 200
+coeff_t: 200
+lora_rank: 256
+lora_modules: [to_k, to_q, to_v, to_out.0, conv, conv1, conv2, conv_shortcut, conv_out, proj_in, proj_out, ff.net.2, ff.net.0.proj]
+mixed_precision: bf16
+seed: 310
