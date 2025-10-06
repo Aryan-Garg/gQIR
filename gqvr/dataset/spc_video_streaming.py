@@ -167,6 +167,7 @@ class SlidingLatentVideoDataset(IterableDataset):
     def __iter__(self):
         for video_info in self.video_files:
             video_path = video_info["video_path"]
+            # print(f"Loading video from {video_path}")
 
             latents, gts, lqs = self._load_video(video_path)
             gts = (gts / 255.0).astype(np.float32)
