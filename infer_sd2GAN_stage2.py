@@ -217,13 +217,18 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3):
             N = 2**bits - 1
             img_lq_sum = np.zeros_like(gt_img, dtype=np.float32)
             for i in range(N): # 4-bit (2**4 - 1)
-                img_lq_sum = img_lq_sum + get_mosaic(generate_spc_from_gt(gt_img))
+                # img_lq_sum = img_lq_sum + get_mosaic(generate_spc_from_gt(gt_img))
+                img_lq_sum = img_lq_sum + generate_spc_from_gt(gt_img)
             img_lq = img_lq_sum / (1.0*N)
+
+            # Select channel 0 of img_lq and repeat it 3 times to make it 3-channel --- monochrome results
+            # img_lq = np.repeat(img_lq[:, :, 0:1], 3, axis=2)
         else:
             img_lq = Image.open(lq_image_path)
     else:
         assert lq_image_path != None, "[!] Come on! Atleast provide the GT OR the lq path dude!"
         img_lq = Image.open(lq_image_path)
+
 
     out = process(img_lq, "", upscale=1.0)
     result = (gt_img, img_lq, out[-1], out[0]) # (GT image, LQ image, prompt, reconstructed image)
@@ -237,13 +242,13 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3):
 
     psnr, ssim, lpips = compute_full_reference_metrics(gt_img_torch, out_img_torch)
     maniqa, clipiqa, musiq = compute_no_reference_metrics(out_img_torch)
-    # gt_img_pil = Image.fromarray(gt_img.astype(np.uint8))
-    # lq_img_pil = Image.fromarray((img_lq*255).astype(np.uint8))
-    # reconstructed_pil = result[-1]
+    gt_img_pil = Image.fromarray(gt_img.astype(np.uint8)).convert('L')
+    lq_img_pil = Image.fromarray((img_lq*255).astype(np.uint8)).convert('L')
+    reconstructed_pil = result[-1].convert('L')
 
-    # gt_img_pil.save(os.path.join(output_dir, f"gt_3bit_color_{}.png"))
-    # lq_img_pil.save(os.path.join(output_dir, f"lq_3bit_color_{}.png"))
-    # reconstructed_pil.save(os.path.join(output_dir, f"out_3bit_color{}.png"))
+    gt_img_pil.save(os.path.join(output_dir, f"gt_3bit_mono.png"))
+    lq_img_pil.save(os.path.join(output_dir, f"lq_3bit_mono.png"))
+    reconstructed_pil.save(os.path.join(output_dir, f"out_3bit_mono.png"))
 
     # if len(result[-2]) > 50:
     #     with open(os.path.join(output_dir, f"prompt_{}.txt"), "w") as f:
@@ -353,7 +358,7 @@ if __name__ == "__main__":
             clipiqa_list.append(metrics[4])
             musiq_list.append(metrics[5])
 
-    with open("./evaluations/full_test_SD21-3bit-Stage2.txt", "w") as f:
+    with open("./evaluation/mono_full_test_SD21-3bit-Stage2.txt", "w") as f:
         f.write("Overall scores on full_test_set:\n")
         f.write("---------- FR scores ----------\n")
         f.write(f"Average PSNR: {np.mean(psnr_list):.2f} dB\n")
