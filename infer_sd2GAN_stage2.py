@@ -206,7 +206,8 @@ def compute_no_reference_metrics(out_img):
     # print(f"DeQA: {deqa_score:.4f}")
     return maniqa_score, clipiqa_score, musiq_score #, deqa_score
 
-def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3):
+
+def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False):
     if gt_image_path:
         gt_img = Image.open(gt_image_path)
         gt_img = gt_img.convert("RGB")
@@ -217,8 +218,12 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3):
             N = 2**bits - 1
             img_lq_sum = np.zeros_like(gt_img, dtype=np.float32)
             for i in range(N): # 4-bit (2**4 - 1)
-                # img_lq_sum = img_lq_sum + get_mosaic(generate_spc_from_gt(gt_img))
-                img_lq_sum = img_lq_sum + generate_spc_from_gt(gt_img)
+                # Bayer:
+                if color:
+                    img_lq_sum = img_lq_sum + get_mosaic(generate_spc_from_gt(gt_img))
+                # DeMosaiced:
+                else:
+                    img_lq_sum = img_lq_sum + generate_spc_from_gt(gt_img)
             img_lq = img_lq_sum / (1.0*N)
 
             # Select channel 0 of img_lq and repeat it 3 times to make it 3-channel --- monochrome results
@@ -231,6 +236,7 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3):
 
 
     out = process(img_lq, "", upscale=1.0)
+    # print(out)
     result = (gt_img, img_lq, out[-1], out[0]) # (GT image, LQ image, prompt, reconstructed image)
 
     # Save results
@@ -242,13 +248,19 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3):
 
     psnr, ssim, lpips = compute_full_reference_metrics(gt_img_torch, out_img_torch)
     maniqa, clipiqa, musiq = compute_no_reference_metrics(out_img_torch)
-    gt_img_pil = Image.fromarray(gt_img.astype(np.uint8)).convert('L')
-    lq_img_pil = Image.fromarray((img_lq*255).astype(np.uint8)).convert('L')
-    reconstructed_pil = result[-1].convert('L')
 
-    gt_img_pil.save(os.path.join(output_dir, f"gt_3bit_mono.png"))
-    lq_img_pil.save(os.path.join(output_dir, f"lq_3bit_mono.png"))
-    reconstructed_pil.save(os.path.join(output_dir, f"out_3bit_mono.png"))
+    if color:
+        gt_img_pil = Image.fromarray(gt_img.astype(np.uint8))
+        lq_img_pil = Image.fromarray((img_lq*255).astype(np.uint8))
+        reconstructed_pil = result[-1]
+    else:
+        gt_img_pil = Image.fromarray(gt_img.astype(np.uint8))#.convert('L')
+        lq_img_pil = Image.fromarray((img_lq*255).astype(np.uint8))#.convert('L')
+        reconstructed_pil = result[-1]#.convert('L')
+
+    gt_img_pil.save(os.path.join(output_dir, f"gt_3bit_{'color' if color else 'mono'}.png"))
+    lq_img_pil.save(os.path.join(output_dir, f"lq_3bit_{'color' if color else 'mono'}.png"))
+    reconstructed_pil.save(os.path.join(output_dir, f"out_3bit_{'color' if color else 'mono'}.png"))
 
     # if len(result[-2]) > 50:
     #     with open(os.path.join(output_dir, f"prompt_{}.txt"), "w") as f:
@@ -350,7 +362,7 @@ if __name__ == "__main__":
         lines = f.readlines()
         for line in tqdm(lines):
             gt_image_path = os.path.join(prefix_path, line.strip()[2:])
-            metrics = eval_single_image(gt_image_path = gt_image_path)
+            metrics = eval_single_image(gt_image_path = gt_image_path, color=config.color)
             psnr_list.append(metrics[0])
             ssim_list.append(metrics[1])
             lpips_list.append(metrics[2])

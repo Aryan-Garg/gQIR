@@ -30,3 +30,4 @@ lora_rank: 256
 lora_modules: [to_k, to_q, to_v, to_out.0, conv, conv1, conv2, conv_shortcut, conv_out, proj_in, proj_out, ff.net.2, ff.net.0.proj]
 mixed_precision: bf16
 seed: 310
+color: false
