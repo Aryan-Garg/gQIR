@@ -69,11 +69,11 @@ qvae_path: "/media/agarg54/Extreme SSD/weights/gqvr_sd21/mosaic_3bit_Stage1_SD21
 loss_mode: "gt_perceptual" # "flow" must | optional: ["l1", "perceptual"] 
 loss_scales:
   l1: 1.
-  perceptual: 10.
+  perceptual: 50.
   mse: 0.
 
 
-lr_raft_model: 1e-5
+lr_burst_model: 1e-5
 optimizer_type: adam
 opt_kwargs:
   betas: [0.9, 0.999]
