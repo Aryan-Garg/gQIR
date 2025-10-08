@@ -168,8 +168,12 @@ class SlidingLatentVideoDataset(IterableDataset):
         for video_info in self.video_files:
             video_path = video_info["video_path"]
             # print(f"Loading video from {video_path}")
-
-            latents, gts, lqs = self._load_video(video_path)
+            try:
+                latents, gts, lqs = self._load_video(video_path)
+            except Exception as e:
+                print(f"Error loading video from {video_path}: {e}")
+                continue
+            
             gts = (gts / 255.0).astype(np.float32)
             gts = (gts * 2) - 1
             lqs = ((lqs*2) - 1).astype(np.float32)
