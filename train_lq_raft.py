@@ -526,7 +526,7 @@ def main(args) -> None:
             # Log images
             if global_step % cfg.log_image_steps == 0 or global_step == 1:
                 log_gt = (center_gt.cpu() + 1) / 2
-                log_pred = (decoded.squeeze(0).cpu() + 1) / 2
+                log_pred = (merged_lq.squeeze(0).cpu() + 1) / 2
                     
                 log_gt = (log_gt * 255.).squeeze(0).permute(1, 2, 0).clamp(0, 255).to(torch.uint8).contiguous().numpy()
                 log_pred = (log_pred * 255.).squeeze(0).permute(1, 2, 0).clamp(0, 255).to(torch.uint8).contiguous().numpy()
