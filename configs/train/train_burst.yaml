@@ -1,4 +1,4 @@
-output_dir: /media/agarg54/Extreme SSD/code/gQVR/experiments_burst
+output_dir: /media/agarg54/Extreme SSD/code/gQVR/experiments_lqRAFT
 
 dataset:
   batch_transform:
@@ -8,15 +8,15 @@ dataset:
     num_workers: 24
     target: gqvr.dataset.spc_video_streaming.SlidingLatentVideoDataset
     params:
-      file_list: /media/agarg54/Extreme SSD/video_dataset_txt_files/udm10.txt
+      file_list: /media/agarg54/Extreme SSD/video_dataset_txt_files/test_dataset.txt
       file_backend_cfg:
         target: gqvr.dataset.file_backend.HardDiskBackend
       out_size: 512
       crop_type: "center"
       use_hflip: False
       precomputed_latents: True
-      sliding_window: 28
-      chunk_size: 30
+      sliding_window: 1
+      chunk_size: 11
       mosaic: false
 
   val:
@@ -69,11 +69,11 @@ qvae_path: "/media/agarg54/Extreme SSD/weights/gqvr_sd21/3bit_vae_10xlr_8xBS/060
 loss_mode: "gt_perceptual" # "flow" must | optional: ["l1", "perceptual"] 
 loss_scales:
   l1: 1.
-  perceptual: 10.
+  perceptual: 50.
   mse: 0.
 
 
-lr_raft_model: 1e-5
+lr_burst_model: 1e-5
 optimizer_type: adam
 opt_kwargs:
   betas: [0.9, 0.999]
