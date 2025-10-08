@@ -8,7 +8,7 @@ dataset:
     num_workers: 24
     target: gqvr.dataset.spc_video_streaming.SlidingLatentVideoDataset
     params:
-      file_list: /media/agarg54/Extreme SSD/video_dataset_txt_files/test_dataset.txt
+      file_list: /media/agarg54/Extreme SSD/video_dataset_txt_files/combined_video_dataset.txt
       file_backend_cfg:
         target: gqvr.dataset.file_backend.HardDiskBackend
       out_size: 512
