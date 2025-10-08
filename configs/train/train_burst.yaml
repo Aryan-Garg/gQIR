@@ -15,7 +15,7 @@ dataset:
       crop_type: "center"
       use_hflip: False
       precomputed_latents: True
-      sliding_window: 1
+      sliding_window: 10
       chunk_size: 11
       mosaic: false
 
