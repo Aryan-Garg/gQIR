@@ -448,6 +448,9 @@ def main(args) -> None:
 
             # Save out & gt on disk
             if global_step % cfg.log_every == 0 or global_step == 1:
+                flow_bw_furthest = flow_vectors[0] if center_t >= (reconstructed_lqs.size(1) // 2) else flow_vectors[-1]
+                flow_img = flow_viz.flow_to_image(flow_bw_furthest[0].permute(1, 2, 0).cpu().numpy())
+                Image.fromarray(flow_img).save(os.path.join(exp_dir, f"flow_furthest_{global_step:06d}.png"))
                 pred = (((decoded_refined+1)/2.) * 255.).detach().cpu().numpy().astype('uint8')
                 center_gt = (((center_gt+1)/2.) * 255.).cpu().numpy().astype('uint8')
                 Image.fromarray(pred[0].transpose(1, 2, 0)).save(os.path.join(exp_dir, f"merged_burst_{global_step:06d}.png"))
