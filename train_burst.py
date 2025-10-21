@@ -345,6 +345,8 @@ def main(args) -> None:
             gts = batch["gts"].permute(0, 1, 4, 2, 3) # B T C H W to match decoder output
             T = lqs.size(1)
             center_gt = gts[:, T // 2, ...] # B 3 H W
+            # print("Lq details:")
+            # print(lqs.shape, lqs.dtype, lqs[:, T//2, ...].min(), lqs[:, T//2, ...].max())
             del gts # save VRAM
             torch.cuda.empty_cache()
 
@@ -354,18 +356,22 @@ def main(args) -> None:
                 for t in range(T):
                     lq_t = lqs[:, t, ...] # B C H W
                     z = vae.encode(lq_t).mode()
-                    latents.append(z)
                     recon_lq_t = vae.decode(z)
+                    latents.append(z)
                     reconstructed_lqs.append(recon_lq_t)
             
             reconstructed_lqs = torch.stack(reconstructed_lqs, dim=1) # B T C H W
-            del lqs
-            torch.cuda.empty_cache()
 
             # Merge lqs here using RAFT
             center_t = T // 2 
             lq_center = reconstructed_lqs[:, center_t, ...] # B C H W
 
+            # print("Reconstructed lq details:")
+            # print(lq_center.shape, lq_center.dtype, lq_center.min(), lq_center.max())
+            # # Save lq_center to disk
+            # Image.fromarray((((lqs[:,T//2, ...]+1)/2.) * 255.).cpu().numpy().astype('uint8')[0].transpose(1, 2, 0)).save(os.path.join(exp_dir, f"LQ_center_{global_step:06d}.png"))
+            # Image.fromarray((lq_center * 255.).cpu().numpy().astype('uint8')[0].transpose(1, 2, 0)).save(os.path.join(exp_dir, f"Y_center_{global_step:06d}.png"))
+            # exit()
             flow_vectors = []
             for t in range(T):
                 lq_t = reconstructed_lqs[:, t, ...] # B C H W
@@ -380,9 +386,9 @@ def main(args) -> None:
                 flow_bw = F.interpolate(flow_bw, size=(64, 64), mode='bilinear', align_corners=True)
                 flow_vectors.append(flow_bw)
 
-            del reconstructed_lqs
+            del reconstructed_lqs, flow_vectors, lqs
             torch.cuda.empty_cache()
-            
+
             aligned_latents = []
             for t in range(T):
                 latent_t = latents[t] # B 4 64 64
@@ -455,10 +461,7 @@ def main(args) -> None:
 
             # Save out & gt on disk
             if global_step % cfg.log_every == 0 or global_step == 1:
-                flow_bw_furthest = flow_vectors[0] if center_t >= (reconstructed_lqs.size(1) // 2) else flow_vectors[-1]
-                flow_img = flow_viz.flow_to_image(flow_bw_furthest[0].permute(1, 2, 0).cpu().numpy())
-                Image.fromarray(flow_img).save(os.path.join(exp_dir, f"flow_furthest_{global_step:06d}.png"))
-                pred = (((decoded_refined+1)/2.) * 255.).detach().cpu().numpy().astype('uint8')
+                pred = (decoded_refined * 255.).detach().cpu().numpy().astype('uint8')
                 center_gt = (((center_gt+1)/2.) * 255.).cpu().numpy().astype('uint8')
                 Image.fromarray(pred[0].transpose(1, 2, 0)).save(os.path.join(exp_dir, f"merged_burst_{global_step:06d}.png"))
                 Image.fromarray(center_gt[0].transpose(1, 2, 0)).save(os.path.join(exp_dir, f"gt_center_{global_step:06d}.png"))
