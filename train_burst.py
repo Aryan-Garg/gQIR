@@ -404,7 +404,7 @@ def main(args) -> None:
                 encoder_hidden_states=encode_prompt("")["text_embed"],
             ).sample
             z = scheduler.step(eps, cfg.coeff_t, z_in).pred_original_sample
-            decoded_refined = (vae.decode(z.float()) / 0.18215).float() # B 3 H W
+            decoded_refined = (vae.decode(z.float() / 0.18215)).float() # B 3 H W
 
             with torch.amp.autocast("cuda", dtype=torch.float16):
                 loss, loss_dict = compute_burst_loss(center_gt, decoded_refined, lpips_model, scales=cfg.loss_scales, loss_mode="gt_perceptual")
@@ -448,8 +448,8 @@ def main(args) -> None:
 
             # Save out & gt on disk
             if global_step % cfg.log_every == 0 or global_step == 1:
-                pred = (decoded_refined * 255.).detach().cpu().numpy().astype('uint8')
-                center_gt = (center_gt * 255.).cpu().numpy().astype('uint8')
+                pred = (((decoded_refined+1)/2.) * 255.).detach().cpu().numpy().astype('uint8')
+                center_gt = (((center_gt+1)/2.) * 255.).cpu().numpy().astype('uint8')
                 Image.fromarray(pred[0].transpose(1, 2, 0)).save(os.path.join(exp_dir, f"merged_burst_{global_step:06d}.png"))
                 Image.fromarray(center_gt[0].transpose(1, 2, 0)).save(os.path.join(exp_dir, f"gt_center_{global_step:06d}.png"))
 
