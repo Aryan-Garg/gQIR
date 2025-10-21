@@ -343,15 +343,19 @@ def main(args) -> None:
         
             lqs = batch["lqs"].permute(0, 1, 4, 2, 3) # B T H W C
             gts = batch["gts"].permute(0, 1, 4, 2, 3) # B T C H W to match decoder output
-            center_gt = gts[:, gts.size(1) // 2, ...] # B 3 H W
+            T = lqs.size(1)
+            center_gt = gts[:, T // 2, ...] # B 3 H W
             del gts # save VRAM
             torch.cuda.empty_cache()
 
             reconstructed_lqs = []
+            latents = []
             with torch.no_grad():
-                for t in range(lqs.size(1)):
+                for t in range(T):
                     lq_t = lqs[:, t, ...] # B C H W
-                    recon_lq_t = vae.decode(vae.encode(lq_t).mode())
+                    z = vae.encode(lq_t).mode()
+                    latents.append(z)
+                    recon_lq_t = vae.decode(z)
                     reconstructed_lqs.append(recon_lq_t)
             
             reconstructed_lqs = torch.stack(reconstructed_lqs, dim=1) # B T C H W
@@ -359,11 +363,11 @@ def main(args) -> None:
             torch.cuda.empty_cache()
 
             # Merge lqs here using RAFT
-            center_t = reconstructed_lqs.size(1) // 2 
+            center_t = T // 2 
             lq_center = reconstructed_lqs[:, center_t, ...] # B C H W
 
             flow_vectors = []
-            for t in range(reconstructed_lqs.size(1)):
+            for t in range(T):
                 lq_t = reconstructed_lqs[:, t, ...] # B C H W
                 ls_in = lq_t.float()
                 center_in = lq_center.float()
@@ -376,12 +380,11 @@ def main(args) -> None:
                 flow_bw = F.interpolate(flow_bw, size=(64, 64), mode='bilinear', align_corners=True)
                 flow_vectors.append(flow_bw)
 
-            latents = []
-            for t in range(reconstructed_lqs.size(1)):
-                latents.append(vae.encode(reconstructed_lqs[:, t, ...]).mode()) # B 4 64 64
-
+            del reconstructed_lqs
+            torch.cuda.empty_cache()
+            
             aligned_latents = []
-            for t in range(reconstructed_lqs.size(1)):
+            for t in range(T):
                 latent_t = latents[t] # B 4 64 64
                 if t == center_t:
                     aligned_latents.append(latent_t)
@@ -396,15 +399,19 @@ def main(args) -> None:
             del aligned_latents
             torch.cuda.empty_cache()
 
-            z_in = (merged_latent * 0.18215).to(weight_dtype) # vae scaling factor
-            timesteps = torch.full((1,), cfg.model_t, dtype=torch.long, device=device)
-            eps = ls_burst_unet(
-                z_in,
-                timesteps,
-                encoder_hidden_states=encode_prompt("")["text_embed"],
-            ).sample
-            z = scheduler.step(eps, cfg.coeff_t, z_in).pred_original_sample
-            decoded_refined = (vae.decode(z.float() / 0.18215)).float() # B 3 H W
+            if cfg.use_unet:
+                ls_burst_unet.train()
+                z_in = (merged_latent * 0.18215).to(weight_dtype) # vae scaling factor
+                timesteps = torch.full((1,), cfg.model_t, dtype=torch.long, device=device)
+                eps = ls_burst_unet(
+                    z_in,
+                    timesteps,
+                    encoder_hidden_states=encode_prompt("")["text_embed"],
+                ).sample
+                z = scheduler.step(eps, cfg.coeff_t, z_in).pred_original_sample
+                decoded_refined = (vae.decode(z.float() / 0.18215)).float() # B 3 H W
+            else:
+                decoded_refined = vae.decode(merged_latent).float() # B 3 H W
 
             with torch.amp.autocast("cuda", dtype=torch.float16):
                 loss, loss_dict = compute_burst_loss(center_gt, decoded_refined, lpips_model, scales=cfg.loss_scales, loss_mode="gt_perceptual")
