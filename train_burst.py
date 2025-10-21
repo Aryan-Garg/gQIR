@@ -450,10 +450,8 @@ def main(args) -> None:
             if global_step % cfg.log_every == 0 or global_step == 1:
                 pred = (decoded_refined * 255.).detach().cpu().numpy().astype('uint8')
                 center_gt = (center_gt * 255.).cpu().numpy().astype('uint8')
-                pred = cv2.cvtColor(pred[0], cv2.COLOR_RGB2BGR)
-                center_gt = cv2.cvtColor(center_gt[0], cv2.COLOR_RGB2BGR)
-                cv2.imwrite(os.path.join(exp_dir, f"merged_burst_{global_step:06d}.png"), pred)
-                cv2.imwrite(os.path.join(exp_dir, f"gt_center_{global_step:06d}.png"), center_gt)
+                Image.fromarray(pred[0].transpose(1, 2, 0)).save(os.path.join(exp_dir, f"merged_burst_{global_step:06d}.png"))
+                Image.fromarray(center_gt[0].transpose(1, 2, 0)).save(os.path.join(exp_dir, f"gt_center_{global_step:06d}.png"))
 
             # Save checkpoint:
             if global_step % cfg.checkpointing_steps == 0:
