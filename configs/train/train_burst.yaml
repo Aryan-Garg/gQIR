@@ -1,4 +1,4 @@
-output_dir: /media/agarg54/Extreme SSD/code/gQVR/experiments_burst
+output_dir: /media/agarg54/Extreme SSD/code/gQVR/experiments_burst_noUNet
 
 dataset:
   batch_transform:
@@ -89,6 +89,7 @@ log_every: 500
 val_every: 1000
 resume_training: False
 
+use_unet: false
 base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
 model_t: 200
 coeff_t: 200
