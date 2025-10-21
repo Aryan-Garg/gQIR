@@ -14,8 +14,11 @@ from accelerate import Accelerator
 from accelerate.utils import set_seed
 from einops import rearrange
 from tqdm import tqdm
-from diffusers import StableDiffusionPipeline
 import lpips
+
+from transformers import CLIPTextModel, CLIPTokenizer
+from diffusers import UNet2DConditionModel, DDPMScheduler
+from peft import LoraConfig
 
 # Debugging libs: ###############
 # import matplotlib.pyplot as plt
@@ -28,8 +31,6 @@ from gqvr.model.vae import AutoencoderKL
 from gqvr.model.core_raft.raft import RAFT
 from gqvr.model.core_raft.utils import flow_viz
 from gqvr.model.core_raft.utils.utils import InputPadder
-
-from gqvr.model.generator import SD2Enhancer
 
 import cv2
 from PIL import Image
@@ -183,103 +184,13 @@ def compute_burst_loss(gt, xhat_lq, lpips_model, scales, loss_mode="gt_perceptua
     return total_loss, loss_dict
 
 
-def compute_stage3_loss(preds, gts, lpips_model, raft_model, loss_mode, scales):
-    flow_loss = 0.
-    l1_loss = 0.
-    perceptual_loss = 0.
-    loss_dict = {"flow": flow_loss, "perceptual": perceptual_loss, "L1_loss": l1_loss}
-    if "flow" in loss_mode:
-        flow_loss = scales.flow * compute_flow_loss(preds, gts, raft_model)
-        loss_dict["flow"] = flow_loss.item()
-
-        if "gt" in loss_mode:
-            l1_loss = scales.l1 * F.l1_loss(preds, gts, reduction="sum")
-            loss_dict["L1_loss"] = l1_loss.item()
-
-        if "perceptual" in loss_mode:
-            perceptual_loss = 0.
-            for i in range(gts.size(1)):
-                perceptual_loss = perceptual_loss + (scales.perceptual * lpips_model(preds[:, i, :, :, :], gts[:, i, :, :, :])).item()
-            loss_dict["perceptual"] = perceptual_loss
-    else:
-        raise NotImplementedError("[!] Always use Optical Flow Warping Loss for stage 3")
-
-    total_loss = flow_loss + l1_loss + perceptual_loss
-    return total_loss, loss_dict
-
-
-def compute_stage3_loss_streaming(zs, gts, vae, lpips_model, raft_model, loss_mode, scales, chunk_T=1):
-    B, T, Cz, Hz, Wz = zs.shape
-    _, _, Cx, Hx, Wx = gts.shape
-    do_flow = ("flow"       in loss_mode)
-    do_l1   = ("l1"         in loss_mode) 
-    do_lpips= ("perceptual" in loss_mode)
-    total_flow = torch.zeros([], device=zs.device)
-    total_l1   = torch.zeros([], device=zs.device)
-    total_lp   = torch.zeros([], device=zs.device)
-
-    prev_dec = None  # decoded pred at t-1 (for flow)
-
-    for t0 in range(0, T, chunk_T):
-        t1 = min(T, t0 + chunk_T)
-        z_chunk = zs[:, t0:t1, ...].to(torch.float32)          # [1, tc, 4, 64, 64]; fp32 for best optical flow computations
-        gt_chunk = gts[:, t0:t1, ...].to(torch.float32)         # [1, tc, 3, H, W]
-
-        # treat time as batch; keep autocast for speed/VRAM
-        tc = t1 - t0
-        z_flat = z_chunk.reshape(B*tc, Cz, Hz, Wz)
-
-        # Decode
-        dec_flat = vae.decode(z_flat)  # [B*tc,3,H,W], fp32 return
-        dec_chunk = dec_flat.reshape(B, tc, 3, Hx, Wx)            # [1, tc, 3, H, W]
-
-        # Accumulate per-frame losses immediately; free decoded frames ASAP
-        for i in range(tc):
-            t = t0 + i
-            dec_t = dec_chunk[:, i, ...]  # [1,3,H,W]
-            gt_t  = gt_chunk[:, i, ...]   # [1,3,H,W]
-
-            # Perceptual & L1
-            if do_l1:
-                total_l1 = total_l1 + scales.l1 * F.l1_loss(dec_t, gt_t)
-
-            if do_lpips:
-                # LPIPS expects [-1,1] often; adjust if your gts/dec are [0,1].
-                # If both already in [0,1], many codebases still feed as-is.
-                total_lp = total_lp + scales.perceptual * lpips_model(dec_t, gt_t)
-
-            # Flow (use decoded preds; change to GT flow supervision if you prefer)
-            if do_flow and prev_dec is not None:
-                _, flow_fw = raft_model(prev_dec, dec_t, iters=20, test_mode=True)
-                _, flow_bw = raft_model(dec_t, prev_dec, iters=20, test_mode=True)
-                occ, warp_to_prev = detect_occlusion(flow_fw, flow_bw, dec_t)
-                noc = 1.0 - occ
-                diff = (prev_dec - warp_to_prev) * noc
-                # robust average
-                denom = torch.clamp(noc.sum(), min=1.0)
-                total_flow = total_flow + scales.flow * (diff.pow(2).sum() / denom)
-
-            prev_dec = dec_t.detach()  # keep the decoded prior for flow next step; detach to avoid long graph
-
-        # Free chunk tensors ASAP
-        del z_flat, dec_flat, dec_chunk, z_chunk, gt_chunk
-        # torch.cuda.empty_cache()
-
-    total_loss = total_flow + total_l1 + total_lp
-    loss_dict = {
-        "flow_loss": float(total_flow.detach().item()),
-        "l1_loss": float(total_l1.detach().item()),
-        "perceptual": float(total_lp.detach().item()),
-    }
-    return total_loss, loss_dict
-
-
 def main(args) -> None:
     # Setup accelerator:
     accelerator = Accelerator(split_batches=True)
     set_seed(310)
     device = accelerator.device
     cfg = OmegaConf.load(args.config)
+    weight_dtype = torch.bfloat16
     # Setup an experiment folder:
     if accelerator.is_main_process:
         exp_dir = cfg.output_dir
@@ -311,16 +222,8 @@ def main(args) -> None:
     else:
         print(f"[!] VAE keys NOT used: {vae_unused}")
 
-    vae.encoder.requires_grad_(True)
-    vae.encoder.train().to(device)
-    vae.decoder.eval().requires_grad_(False).to(device)
-    # vae.post_quant_conv.to(device)
-    # vae.decoder.to(device)
-    # def decode_latent(z):
-    #     z = z.to(post_quant_conv.weight.dtype)
-    #     z = post_quant_conv(z)
-    #     dec = decoder(z)
-    #     return dec.float()
+    vae.requires_grad_(False)
+    vae.eval().to(device)
 
     class RAFT_args:
         mixed_precision = True
@@ -330,11 +233,6 @@ def main(args) -> None:
     raft_args = RAFT_args()
 
     raft_model = RAFT(raft_args)
-    # raft_model_c1 = RAFT(raft_args)
-    # raft_model_c2 = RAFT(raft_args)
-    # raft_model_c3 = RAFT(raft_args)
-    # raft_model_c4 = RAFT(raft_args)
-
     raft_things_dict = torch.load("./pretrained_ckpts/models/raft-things.pth")
     corrected_state_dict = {}
     for k, v in raft_things_dict.items():
@@ -342,53 +240,55 @@ def main(args) -> None:
         corrected_state_dict[k2] = v
 
     raft_model.load_state_dict(corrected_state_dict)
-    # raft_model_c1.load_state_dict(corrected_state_dict)
-    # raft_model_c2.load_state_dict(corrected_state_dict)
-    # raft_model_c3.load_state_dict(corrected_state_dict)
-    # raft_model_c4.load_state_dict(corrected_state_dict)
-    raft_model.train().requires_grad_(True).to(device)
-    # raft_model_c1.train().requires_grad_(True).to(device)
-    # raft_model_c2.train().requires_grad_(True).to(device)
-    # raft_model_c3.train().requires_grad_(True).to(device)
-    # raft_model_c4.train().requires_grad_(True).to(device)
+    raft_model.eval().requires_grad_(False).to(device)
 
-    print(f"\n[~] All trainable RAFT model parameters: {(sum(p.numel() for p in raft_model.parameters() if p.requires_grad)) / 1e6:.2f}M")
-    print(f"[~] All trainable VAE model parameters: {sum(p.numel() for p in vae.parameters() if p.requires_grad) / 1e6:.2f}M")
-    print(f"[~] All VAE model parameters: {sum(p.numel() for p in vae.parameters()) / 1e6:.2f}M\n")
+    tokenizer = CLIPTokenizer.from_pretrained(cfg.base_model_path, subfolder="tokenizer")
+    text_encoder = CLIPTextModel.from_pretrained(cfg.base_model_path, subfolder="text_encoder", dtype=weight_dtype).to(device)
+    text_encoder.eval().requires_grad_(False)
 
-    if cfg.with_unet:
-        sd2_enhancer = SD2Enhancer(
-            base_model_path     =   cfg.base_model_path,
-            weight_path         =   cfg.weight_path,
-            lora_modules        =   cfg.lora_modules,
-            lora_rank           =   cfg.lora_rank,
-            model_t             =   cfg.model_t,
-            coeff_t             =   cfg.coeff_t,
-            vae_cfg             =   cfg.model.vae_cfg,
-            device              =   args.device, 
-        )
-        sd2_enhancer.init_models(init_vae = False)
+    def encode_prompt(prompt):
+        txt_ids = tokenizer(
+            prompt,
+            max_length=tokenizer.model_max_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
+        ).input_ids
+        text_embed = text_encoder(txt_ids.to(accelerator.device))[0]
+        return {"text_embed": text_embed}
+    
+    scheduler = DDPMScheduler.from_pretrained(cfg.base_model_path, subfolder="scheduler")
+    ls_burst_unet = UNet2DConditionModel.from_pretrained(cfg.base_model_path, 
+                                                         subfolder="unet", 
+                                                         torch_dtype=torch.bfloat16).to(device)
+    ls_burst_unet.eval().requires_grad_(False)
 
+    target_modules = cfg.lora_modules
+    G_lora_cfg = LoraConfig(
+        r=cfg.lora_rank,
+        lora_alpha=cfg.lora_rank,
+        init_lora_weights="gaussian",
+        target_modules=target_modules,
+    )
+    ls_burst_unet.add_adapter(G_lora_cfg)
+    lora_params = list(filter(lambda p: p.requires_grad, ls_burst_unet.parameters()))
+    assert lora_params, "Failed to find lora parameters"
+    for p in lora_params:
+        p.data = p.to(torch.float32)
+
+    # print(f"\n[~] All trainable RAFT model parameters: {(sum(p.numel() for p in raft_model.parameters() if p.requires_grad)) / 1e6:.2f}M")
+    print(f"\n[~] All RAFT model parameters: {(sum(p.numel() for p in raft_model.parameters())) / 1e6:.2f}M")
+    # print(f"[~] All trainable VAE model parameters: {sum(p.numel() for p in vae.parameters() if p.requires_grad) / 1e6:.2f}M")
+    print(f"[~] All VAE model parameters: {sum(p.numel() for p in vae.parameters()) / 1e6:.2f}M")
+    print(f"[~] All trainable burst Layer parameters: {sum(p.numel() for p in ls_burst_unet.parameters() if p.requires_grad) / 1e6:.2f}M")
+    print(f"[~] All burst Layer parameters: {sum(p.numel() for p in ls_burst_unet.parameters()) / 1e6:.2f}M")
+    print(f"[~] All text encoder parameters: {(sum(p.numel() for p in text_encoder.parameters())) / 1e6:.2f}M\n")
+
+    
     # Setup optimizer:
-    opt = torch.optim.AdamW(list(vae.encoder.parameters()) + list(raft_model.parameters()), 
+    opt = torch.optim.AdamW(ls_burst_unet.parameters(), 
         lr=cfg.lr_burst_model, 
         **cfg.opt_kwargs)
-
-    # opt_c1 = torch.optim.AdamW(raft_model_c1.parameters(), 
-    #     lr=cfg.lr_raft_model, 
-    #     **cfg.opt_kwargs)
-
-    # opt_c2 = torch.optim.AdamW(raft_model_c1.parameters(), 
-    #     lr=cfg.lr_raft_model, 
-    #     **cfg.opt_kwargs)
-
-    # opt_c3 = torch.optim.AdamW(raft_model_c1.parameters(), 
-    #     lr=cfg.lr_raft_model, 
-    #     **cfg.opt_kwargs)
-
-    # opt_c4 = torch.optim.AdamW(raft_model_c1.parameters(), 
-    #     lr=cfg.lr_raft_model, 
-    #     **cfg.opt_kwargs)
 
     # Setup data:
     dataset = instantiate_from_config(cfg.dataset.train)
@@ -398,28 +298,9 @@ def main(args) -> None:
         num_workers=cfg.dataset.train.num_workers,
         drop_last=True,
     )
-    # val_dataset = instantiate_from_config(cfg.dataset.val)
-    # val_loader = DataLoader(
-    #     dataset=val_dataset,
-    #     batch_size=cfg.dataset.val.batch_size,
-    #     num_workers=cfg.dataset.val.num_workers,
-    #     drop_last=True,
-    # )
 
     batch_transform = instantiate_from_config(cfg.dataset.batch_transform)
 
-    # Prepare models for training/inference:
-    # temp_stabilizer, opt, loader, val_loader = accelerator.prepare(
-    #     temp_stabilizer, opt, loader, val_loader
-    # )
-
-    # raft_model_c1, raft_model_c2, raft_model_c3, raft_model_c4, opt_c1, opt_c2, opt_c3, opt_c4, loader = accelerator.prepare(
-    #     raft_model_c1, raft_model_c2, raft_model_c3, raft_model_c4, opt_c1, opt_c2, opt_c3, opt_c4, loader
-    # )
-    # raft_model_c1 = accelerator.unwrap_model(raft_model_c1)
-    # raft_model_c2 = accelerator.unwrap_model(raft_model_c2)
-    # raft_model_c3 = accelerator.unwrap_model(raft_model_c3)
-    # raft_model_c4 = accelerator.unwrap_model(raft_model_c4)
     raft_model, opt, loader = accelerator.prepare(
         raft_model, opt, loader
     )
@@ -466,144 +347,71 @@ def main(args) -> None:
             del gts # save VRAM
             torch.cuda.empty_cache()
 
-            # Merge lqs here using RAFT
-            center_t = lqs.size(1) // 2
-            lq_center = lqs[:, center_t, ...] # B C H W
+            reconstructed_lqs = []
+            with torch.no_grad():
+                for t in range(lqs.size(1)):
+                    lq_t = lqs[:, t, ...] # B C H W
+                    recon_lq_t = vae.decode(vae.encode(lq_t).mode())
+                    reconstructed_lqs.append(recon_lq_t)
+            
+            reconstructed_lqs = torch.stack(reconstructed_lqs, dim=1) # B T C H W
+            del lqs
+            torch.cuda.empty_cache()
 
-            aligned_lqs = []
-            for t in range(lqs.size(1)):
-                if t == center_t:
-                    aligned_lqs.append(lq_center)
-                    continue
-                lq_t = lqs[:, t, ...] # B C H W
+            # Merge lqs here using RAFT
+            center_t = reconstructed_lqs.size(1) // 2 
+            lq_center = reconstructed_lqs[:, center_t, ...] # B C H W
+
+            flow_vectors = []
+            for t in range(reconstructed_lqs.size(1)):
+                lq_t = reconstructed_lqs[:, t, ...] # B C H W
                 ls_in = lq_t.float()
                 center_in = lq_center.float()
                 if t < center_t:
                     _, flow_bw = raft_model(center_in, ls_in, iters=20, test_mode=True) # B 2 64 64
                 else:
                     _, flow_bw = raft_model(ls_in, center_in, iters=20, test_mode=True) # B 2 64 64
-                warped_lq = differentiable_warp(lq_t, flow_bw) # B C H W
-                aligned_lqs.append(warped_lq)
-            aligned_lqs = torch.stack(aligned_lqs, dim=1) # B T C H W
+
+                # Downsample flow_bw to match latent space size (1, 4, 64, 64) with the highest precision possible
+                flow_bw = F.interpolate(flow_bw, size=(64, 64), mode='bilinear', align_corners=True)
+                flow_vectors.append(flow_bw)
+
+            latents = []
+            for t in range(reconstructed_lqs.size(1)):
+                latents.append(vae.encode(reconstructed_lqs[:, t, ...]).mode()) # B 4 64 64
+
+            aligned_latents = []
+            for t in range(reconstructed_lqs.size(1)):
+                latent_t = latents[t] # B 4 64 64
+                if t == center_t:
+                    aligned_latents.append(latent_t)
+                    continue
+                flow_bw = flow_vectors[t] # B 2 64 64
+                warped_latent = differentiable_warp(latent_t, flow_bw) # B 4 64 64
+                aligned_latents.append(warped_latent)
+            
+            aligned_latents = torch.stack(aligned_latents, dim=1) # B T C H W
             # Average of aligned lqs 
-            merged_lq = torch.mean(aligned_lqs, dim=1, keepdim=False) # B C H W
-            # Save merged lq img on disk
-            if global_step % cfg.log_every == 0 or global_step == 1:
-                lq_save = (merged_lq * 255.).cpu().numpy().astype('uint8')
-                lq_save = cv2.cvtColor(lq_save[0], cv2.COLOR_RGB2BGR)
-                cv2.imwrite(os.path.join(exp_dir, f"lq_merged_{global_step:06d}.png"), lq_save)
-                
-            del aligned_lqs
+            merged_latent = torch.mean(aligned_latents, dim=1, keepdim=False) # B C H W
+            del aligned_latents
             torch.cuda.empty_cache()
 
-            merged_lq_z = vae.encode(merged_lq).mode() # B 4 64 64
+            z_in = (merged_latent * 0.18215).to(weight_dtype) # vae scaling factor
+            timesteps = torch.full((1,), cfg.model_t, dtype=torch.long, device=device)
+            eps = ls_burst_unet(
+                z_in,
+                timesteps,
+                encoder_hidden_states=encode_prompt("")["text_embed"],
+            ).sample
+            z = scheduler.step(eps, cfg.coeff_t, z_in).pred_original_sample
+            decoded_refined = (vae.decode(z.float()) / 0.18215).float() # B 3 H W
 
-            # with torch.no_grad():
-            #     vae_latents = []
-            #     for t in range(lqs.size(1)):
-            #         lq_t = lqs[:, t, ...] # B C H W
-            #         latent_t = vae.encode(lq_t).mode() # B 4 64 64
-            #         vae_latents.append(latent_t)
-            #     zs = torch.stack(vae_latents, dim=1) # B T 4 64 64
-            #     # print("[+] All latents from lq video stacked")
-            #     # Free up VRAM
-            #     del vae_latents
-            #     torch.cuda.empty_cache()
-                # # Warp all latents to center latent using raft
-                # aligned_zs = []
-                # print(f"[+] Total frames in burst: {zs.size(1)}")
-                # center_t = zs.size(1) // 2
-                # z_center = zs[:, center_t, ...] # B 4 64 64
-                # if global_step % 100 == 0:
-                #     torch.save(z_center, f"center_latent_{global_step}.pt")
-                # for t in range(zs.size(1)):
-                #     if t == center_t:
-                #         aligned_zs.append(z_center)
-                #         continue
-                #     z_t = zs[:, t, ...] # B 4 64 64
-
-                    # ls_in_c1 = z_t[:, 0, ...].repeat(1,3,1,1).float()
-                    # ls_in_c2 = z_t[:, 1, ...].repeat(1,3,1,1).float()
-                    # ls_in_c3 = z_t[:, 2, ...].repeat(1,3,1,1).float()
-                    # ls_in_c4 = z_t[:, 3, ...].repeat(1,3,1,1).float()
-                    # center_in_c1 = z_center[:, 0, ...].repeat(1,3,1,1).float()
-                    # center_in_c2 = z_center[:, 0, ...].repeat(1,3,1,1).float()
-                    # center_in_c3 = z_center[:, 0, ...].repeat(1,3,1,1).float()
-                    # center_in_c4 = z_center[:, 0, ...].repeat(1,3,1,1).float()
-
-                    # ls_in_up_c1 = F.interpolate(ls_in_c1, size=(256,256), mode='bilinear', align_corners=False)
-                    # ls_in_up_c2 = F.interpolate(ls_in_c2, size=(256,256), mode='bilinear', align_corners=False)
-                    # ls_in_up_c3 = F.interpolate(ls_in_c3, size=(256,256), mode='bilinear', align_corners=False)
-                    # ls_in_up_c4 = F.interpolate(ls_in_c4, size=(256,256), mode='bilinear', align_corners=False)
-                    # center_in_up_c1 = F.interpolate(center_in_c1, size=(256,256), mode='bilinear', align_corners=False)
-                    # center_in_up_c2 = F.interpolate(center_in_c2, size=(256,256), mode='bilinear', align_corners=False)
-                    # center_in_up_c3 = F.interpolate(center_in_c3, size=(256,256), mode='bilinear', align_corners=False)
-                    # center_in_up_c4 = F.interpolate(center_in_c4, size=(256,256), mode='bilinear', align_corners=False)
-
-                    # print(f"[+] Computing flow between frames {t} and {center_t}\nls_in: {ls_in_up.shape}, center_in: {center_in_up.shape}")
-                    # if t < center_t:
-                    #     # _, flow_fw = raft_model(ls_in_up, center_in_up, iters=20, test_mode=True) # B 2 64 64 --- NEed this only for flow loss
-                    #     _, flow_bw_c1 = raft_model_c1(center_in_up_c1, ls_in_up_c1, iters=20, test_mode=True) # B 2 64 64
-                    #     _, flow_bw_c2 = raft_model_c2(center_in_up_c2, ls_in_up_c2, iters=20, test_mode=True) # B 2 64 64
-                    #     _, flow_bw_c3 = raft_model_c3(center_in_up_c3, ls_in_up_c3, iters=20, test_mode=True) # B 2 64 64
-                    #     _, flow_bw_c4 = raft_model_c4(center_in_up_c4, ls_in_up_c4, iters=20, test_mode=True) # B 2 64 64
-                    # else:
-                    #     # _, flow_fw = raft_model(center_in_up, ls_in_up, iters=20, test_mode=True) # B 2 64 64
-                    #     _, flow_bw_c1 = raft_model_c1(ls_in_up_c1, center_in_up_c1, iters=20, test_mode=True) # B 2 64 64
-                    #     _, flow_bw_c2 = raft_model_c2(ls_in_up_c2, center_in_up_c2, iters=20, test_mode=True) # B 2 64 64
-                    #     _, flow_bw_c3 = raft_model_c3(ls_in_up_c3, center_in_up_c3, iters=20, test_mode=True) # B 2 64 64
-                    #     _, flow_bw_c4 = raft_model_c4(ls_in_up_c4, center_in_up_c4, iters=20, test_mode=True) # B 2 64 64
-                    
-                    # z_t_warped_c1 = differentiable_warp(center_in_up_c1, flow_bw_c1)
-                    # z_t_warped_c2 = differentiable_warp(center_in_up_c2, flow_bw_c2)
-                    # z_t_warped_c3 = differentiable_warp(center_in_up_c3, flow_bw_c3)
-                    # z_t_warped_c4 = differentiable_warp(center_in_up_c4, flow_bw_c4)
-
-                    # z_t_warped = torch.stack([z_t_warped_c1[:, 0, ...], 
-                    #                         z_t_warped_c2[:, 0, ...], 
-                    #                         z_t_warped_c3[:, 0, ...], 
-                    #                         z_t_warped_c4[:, 0, ...]], dim=1)
-                    # z_t_warped = F.interpolate(z_t_warped, size=(64,64), mode='bilinear', align_corners=False)
-                    # aligned_zs.append(z_t_warped)
-                # print("[+] All latents aligned to center frame")
-                
-                # Merge all aligned latents - weighted sum (further away frames have smaller alpha, since more erroneous flow)
-                # sum_merged_frame = torch.zeros_like(z_center)
-                # for t in range(zs.size(1)):
-                #     # Alpha is inversely proportionate to distance from center. All alphas sum to 1
-                #     alpha = (center_t - abs(t - center_t)) / zs.size(1)
-                #     sum_merged_frame = sum_merged_frame + alpha * aligned_zs[t]
-                # print("[+] All latents merged to single latent")
-            with torch.no_grad():
-                if cfg.with_unet: 
-                    burst_latent = sd2_enhancer.forward_generator(merged_lq_z.half()) # B 4 64 64
-                else:
-                    burst_latent = merged_lq_z
-                
-                # if global_step % 100 == 0:
-                #     torch.save(burst_latent, f"merged_burst_latent_{global_step}.pt")
-
-                decoded = vae.decode(burst_latent) # B 3 H W
-                # print("[+] Merged latent decoded to image") 
-                
             with torch.amp.autocast("cuda", dtype=torch.float16):
-                loss, loss_dict = compute_burst_loss(center_gt, decoded, lpips_model, scales=cfg.loss_scales, loss_mode="gt_perceptual")
+                loss, loss_dict = compute_burst_loss(center_gt, decoded_refined, lpips_model, scales=cfg.loss_scales, loss_mode="gt_perceptual")
             
-
             accelerator.backward(loss)
             opt.step()
             opt.zero_grad()
-            # opt_c1.step()
-            # opt_c1.zero_grad()
-
-            # opt_c2.step()
-            # opt_c2.zero_grad()
-
-            # opt_c3.step()
-            # opt_c3.zero_grad()
-
-            # opt_c4.step()
-            # opt_c4.zero_grad()
             accelerator.wait_for_everyone()
 
             pbar.update(1)
@@ -615,13 +423,6 @@ def main(args) -> None:
             # Log loss values:
             if global_step % cfg.log_every == 0 or global_step == 1:
                 # Gather values from all processes
-                avg_flow_loss = (
-                    accelerator.gather(
-                        torch.tensor(step_flow_loss, device=device).unsqueeze(0)
-                    )
-                    .mean()
-                    .item()
-                )
                 avg_l1_loss = (
                     accelerator.gather(
                         torch.tensor(step_l1_loss, device=device).unsqueeze(0)
@@ -645,114 +446,26 @@ def main(args) -> None:
                     writer.add_scalar("train/l1_loss_step", avg_l1_loss, global_step)
                     writer.add_scalar("train/perceptual_loss_step", avg_perceptual_loss, global_step)
 
+            # Save out & gt on disk
+            if global_step % cfg.log_every == 0 or global_step == 1:
+                pred = (decoded_refined * 255.).detach().cpu().numpy().astype('uint8')
+                center_gt = (center_gt * 255.).cpu().numpy().astype('uint8')
+                pred = cv2.cvtColor(pred[0], cv2.COLOR_RGB2BGR)
+                center_gt = cv2.cvtColor(center_gt[0], cv2.COLOR_RGB2BGR)
+                cv2.imwrite(os.path.join(exp_dir, f"merged_burst_{global_step:06d}.png"), pred)
+                cv2.imwrite(os.path.join(exp_dir, f"gt_center_{global_step:06d}.png"), center_gt)
+
             # Save checkpoint:
             if global_step % cfg.checkpointing_steps == 0:
                 if accelerator.is_local_main_process:
-                    checkpoint = raft_model.state_dict()
-                    ckpt_path = f"{ckpt_dir}/raft_{global_step:07d}.pt"
+                    checkpoint = ls_burst_unet.state_dict()
+                    ckpt_path = f"{ckpt_dir}/ls_burst_unet_{global_step:07d}.pt"
                     torch.save(checkpoint, ckpt_path)
-                    # checkpoint_c1 = raft_model_c1.state_dict()
-                    # checkpoint_c2 = raft_model_c2.state_dict()
-                    # checkpoint_c3 = raft_model_c3.state_dict()
-                    # checkpoint_c4 = raft_model_c4.state_dict()
-                    # ckpt_path_c1 = f"{ckpt_dir}/raft_c1_{global_step:07d}.pt"
-                    # ckpt_path_c2 = f"{ckpt_dir}/raft_c2_{global_step:07d}.pt"
-                    # ckpt_path_c3 = f"{ckpt_dir}/raft_c3_{global_step:07d}.pt"
-                    # ckpt_path_c4 = f"{ckpt_dir}/raft_c4_{global_step:07d}.pt"
-                    # torch.save(checkpoint_c1, ckpt_path_c1)
-                    # torch.save(checkpoint_c2, ckpt_path_c2)
-                    # torch.save(checkpoint_c3, ckpt_path_c3)
-                    # torch.save(checkpoint_c4, ckpt_path_c4)
-
-            # Log images
-            if global_step % cfg.log_image_steps == 0 or global_step == 1:
-                log_gt = (center_gt.cpu() + 1) / 2
-                log_pred = (decoded.squeeze(0).cpu() + 1) / 2
                     
-                log_gt = (log_gt * 255.).squeeze(0).permute(1, 2, 0).clamp(0, 255).to(torch.uint8).contiguous().numpy()
-                log_pred = (log_pred * 255.).squeeze(0).permute(1, 2, 0).clamp(0, 255).to(torch.uint8).contiguous().numpy()
-
-                save_dir = os.path.join(cfg.output_dir, "log_imgs", f"{global_step:06}")
-                if not os.path.exists(save_dir):
-                    os.makedirs(save_dir)
-                
-                Image.fromarray(log_gt).save(os.path.join(save_dir, f"gt_frame.png"))
-                Image.fromarray(log_pred).save(os.path.join(save_dir, f"pred_frame.png"))
-
-            # Evaluate model:
-            # if global_step % cfg.val_every == 0 or global_step == 1:
-            #     temp_stabilizer.eval() 
-            #     # NOTE: eval() only halts BN stat accumulation & disables dropout. grad computation can still happen! Use with torch.no_grad() around model.
-
-            #     val_loss = []
-            #     val_lpips_loss = []
-            #     val_psnr = []
-            #     val_pbar = tqdm(
-            #         iterable=None,
-            #         disable=not accelerator.is_local_main_process,
-            #         unit="batch",
-            #         leave=False,
-            #         desc="Validation",
-            #     )
-            #     for val_batch in val_loader:
-            #         to(val_batch, device)
-            #         val_batch = batch_transform(val_batch)
-            #         val_zs = val_batch["latents"] # B T 4 64 64
-            #         val_gts = val_batch["gts"]
-            #         with torch.no_grad():
-            #             stable_zs = temp_stabilizer(val_zs) # B T 4 64 64
-            #             val_pred = vae.decode(stable_zs.squeeze(0))
-            #             val_pred = val_pred.unsqueeze(0)
-            #             with torch.amp.autocast("cuda", dtype=torch.float16):
-            #                 vloss, vloss_dict = compute_stage3_loss_streaming(stable_zs, val_gts, vae,
-            #                                                                   lpips_model, raft_model, 
-            #                                                                   "l1_flow_perceptual", cfg.loss_scales,
-            #                                                                   chunk_T=1)
-            #             psnr = 0.
-            #             for i in range(val_gts.size(1)):
-            #                 psnr = psnr + calculate_psnr_pt(val_pred[:, i, ...], val_gts[:, i, ...], crop_border=0).mean().item()
-            #             val_psnr.append(psnr)
-            #             val_loss.append(vloss.item())
-            #             val_lpips_loss.append(vloss_dict['perceptual'])
-            #         val_pbar.update(1)
-
-            #     val_pbar.close()
-            #     avg_val_loss = (
-            #         accelerator.gather(
-            #             torch.tensor(val_loss, device=device).unsqueeze(0)
-            #         )
-            #         .mean()
-            #         .item()
-            #     )
-            #     avg_val_lpips = (
-            #         accelerator.gather(
-            #             torch.tensor(val_lpips_loss, device=device).unsqueeze(0)
-            #         )
-            #         .mean()
-            #         .item()
-            #     )
-            #     avg_val_psnr = (
-            #         accelerator.gather(
-            #             torch.tensor(val_psnr, device=device).unsqueeze(0)
-            #         )
-            #         .mean()
-            #         .item()
-            #     )
-            #     if accelerator.is_local_main_process:
-            #         for tag, val in [
-            #             ("val/total_loss", avg_val_loss),
-            #             ("val/lpips", avg_val_lpips),
-            #             ("val/psnr", avg_val_psnr),
-            #         ]:
-            #             writer.add_scalar(tag, val, global_step)
-            #     temp_stabilizer.train()
-
-            accelerator.wait_for_everyone()
 
             if global_step == max_steps:
                 break
 
-            pbar.update(1)
         pbar.set_description(
             f"Epoch: {epoch:04d}, Global Step: {global_step:06d}, Loss: {loss.item():.6f}"
         )
