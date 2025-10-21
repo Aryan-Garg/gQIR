@@ -62,7 +62,7 @@ class VideoDataset(data.Dataset):
     def __len__(self):
         return len(self.video_files)
 
-    def _load_video(self, video_path):
+    def _load_video(self, video_path, chunk_size):
         """Load all precomputed latent tensors from a single video folder."""
         correct_video_path =  self.HARDDISK_DIR + video_path[2:]
         if self.precomputed_latents:
@@ -73,9 +73,12 @@ class VideoDataset(data.Dataset):
                 latents.append(latent)
 
         png_files = sorted([f for f in os.listdir(correct_video_path) if f.endswith(".png")])
+        T_total = len(png_files)
+        start_idx = random.randint(0, max(0, T_total - chunk_size)) if T_total > chunk_size else 0
         gts = []
         lqs = []
-        for img_name in png_files:
+        for i in range(start_idx, start_idx + chunk_size):
+            img_name = png_files[i]
             image_path = os.path.join(correct_video_path, img_name)
             image = Image.open(image_path).convert("RGB")
             # print(f"Loaded GT image size: {image.size}")
@@ -175,7 +178,7 @@ class VideoDataset(data.Dataset):
                 video_info = self.video_files[idx]
                 video_path = video_info["video_path"]
                 # print(f"Loading video from {video_path}")
-                latents, gts, lqs = self._load_video(video_path)
+                latents, gts, lqs = self._load_video(video_path, self.chunk_size)
                 break
             except Exception as e:
                 print(f"Error loading video from {video_path}: {e}")
@@ -185,20 +188,14 @@ class VideoDataset(data.Dataset):
         gts = (gts / 255.0).astype(np.float32)
         gts = (gts * 2) - 1
         lqs = ((lqs*2) - 1).astype(np.float32)
+    
         
-        chunk_size = min(self.chunk_size, gts.shape[0])
-        T_total = gts.shape[0]
-        start_idx = random.randint(0, max(0, T_total - chunk_size)) if T_total > chunk_size else 0
-        
-        gt_chunk = gts[start_idx:start_idx + chunk_size] 
-        lq_chunk = lqs[start_idx:start_idx + chunk_size]
         if self.precomputed_latents:
-            chunk = latents[start_idx:start_idx + chunk_size]  # [T, C, H, W]
-            return {"latents": chunk,        # [T, C, H, W]
-                    "gts": gt_chunk, 
-                    "lqs": lq_chunk}  # [T, H, W, C], [-1, 1], float32
+            return {"latents": latents,        # [T, C, H, W]
+                    "gts": gts, 
+                    "lqs": lqs}  # [T, H, W, C], [-1, 1], float32
         else:
-            return {"gts": gt_chunk, "lqs": lq_chunk}
+            return {"gts": gts, "lqs": lqs}
     
 
 if __name__ == "__main__":
