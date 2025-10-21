@@ -173,7 +173,7 @@ class SlidingLatentVideoDataset(IterableDataset):
             except Exception as e:
                 print(f"Error loading video from {video_path}: {e}")
                 continue
-            
+
             gts = (gts / 255.0).astype(np.float32)
             gts = (gts * 2) - 1
             lqs = ((lqs*2) - 1).astype(np.float32)

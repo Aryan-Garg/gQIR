@@ -9,27 +9,21 @@ import os
 import numpy as np
 import numpy.typing as npt
 import cv2
-from PIL import Image
+from PIL import Image, ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
 import torch
 import torch.utils.data as data
+
 
 from .utils import load_video_file_list, center_crop_arr, random_crop_arr, srgb_to_linearrgb, emulate_spc
 from ..utils.common import instantiate_from_config
 
 
-class SPCVideoDataset(data.Dataset):
+class VideoDataset(data.Dataset):
     """
-        Dataset for finetuning the VAE's encoder and SPC-ControlNet Stages (independent of each other).
-        Args:
-            file_list (str): Path to the file list containing image paths and optionally prompts.
-            file_backend_cfg (Mapping[str, Any]): Configuration for the file backend to load images.
-            out_size (int): The output size of the images after cropping.
-            crop_type (str): Type of cropping to apply to the images. Options are 'none', 'center', or 'random'.
-        Returns:
-            A dictionary containing:
-                - 'gt': Ground truth image tensor of shape (C, H, W) with pixel values in the range [-1, 1].
-                - 'lq': SPC image (dubbed as low-quality) tensor of shape (C, H, W) with pixel values in the range [-1, 1].
-                - 'prompt': The prompt associated with the image.
+    Streams multiple precomputed latent videos from disk and yields sliding windows of T frames.
+    Assumes precomputed latents are stored as .pt tensors.
     """
     def __init__(self,
                     file_list: str,
@@ -37,9 +31,18 @@ class SPCVideoDataset(data.Dataset):
                     out_size: int,
                     crop_type: str,
                     use_hflip: bool,
-                    precomputed_latents: bool) -> "SPCVideoDataset":
-
-        super(SPCVideoDataset, self).__init__()
+                    sliding_window: int,
+                    chunk_size: int,
+                    precomputed_latents: bool = False,
+                    mosaic: bool = True) -> "VideoDataset":
+        """
+        Args:
+            video_files (list of dict): each dict must contain:
+                - 'video_path': str, path to video folder with .pt files
+                - 'prompt': str, associated prompt
+            chunk_size (int): number of frames per chunk (T)
+            device (str): device to load tensors onto
+        """
         self.file_list = file_list
         self.video_files = load_video_file_list(file_list)
         self.file_backend = instantiate_from_config(file_backend_cfg)
@@ -49,183 +52,168 @@ class SPCVideoDataset(data.Dataset):
         assert self.crop_type in ["none", "center", "random"]
         self.HARDDISK_DIR = "/media/agarg54/Extreme SSD/"
         self.precomputed_latents = precomputed_latents
+        self.sliding_window = sliding_window
+        self.chunk_size = chunk_size
+        self.bits = 3
+        self.mosaic = mosaic
+        print(f"[+] Sim bits = {self.bits}")
 
 
-    def load_gt_images(self, video_path: str, max_retry: int = 5):
-        gt_images = []
-        latents = []
-        # print(f"Loading GT video from {video_path}")
-        max_frames = 30
-        frame_counter = 0
-        # print(f"Extracting from {video_path}")
-        for img_name in sorted(os.listdir(video_path)):
-            # print(f"This file: {os.path.join(video_path, img_name)}")
-            if self.precomputed_latents:
-                if img_name.endswith(".pt"):
-                    latent = torch.load(os.path.join(video_path, img_name), map_location="cpu") # ensure you only pass in video paths that have precomputed latents
-                    latents.append(latent)
+    def __len__(self):
+        return len(self.video_files)
 
-                if img_name.endswith(".png"):
-                    if not os.path.exists(os.path.join(video_path, f"{img_name[:-4]}.pt")):
-                        print(f"Exiting cause no more pre-computed latents exist for (& after) the img: {img_name} for video: {video_path}\nFix txt file or pre-compute latents for this video dumbass!")
-                        break
-                    image_path = os.path.join(video_path, img_name)
-                    # print(f"Loading {image_path}")
-                    image = Image.open(image_path).convert("RGB")
-                    # print(f"Loaded GT image size: {image.size}")
-                    if self.crop_type != "none":
-                        if image.height == self.out_size and image.width == self.out_size:
-                            image = np.array(image)
-                        else:
-                            if self.crop_type == "center":
-                                image = center_crop_arr(image, self.out_size)
-                            elif self.crop_type == "random":
-                                image = random_crop_arr(image, self.out_size, min_crop_frac=0.7)
-                    else:
-                        assert image.height == self.out_size and image.width == self.out_size
-                        image = np.array(image)
-                        # hwc, rgb, 0,255, uint8
-            
-                    gt_images.append(image)
-                    frame_counter += 1
-                    if frame_counter == 64:
-                        break
+    def _load_video(self, video_path):
+        """Load all precomputed latent tensors from a single video folder."""
+        correct_video_path =  self.HARDDISK_DIR + video_path[2:]
+        if self.precomputed_latents:
+            latent_files = sorted([f for f in os.listdir(correct_video_path) if f.endswith(".pt")])
+            latents = []
+            for lf in latent_files:
+                latent = torch.load(os.path.join(correct_video_path, lf), map_location="cpu")  # [1, 4 , 64, 64]
+                latents.append(latent)
+
+        png_files = sorted([f for f in os.listdir(correct_video_path) if f.endswith(".png")])
+        gts = []
+        lqs = []
+        for img_name in png_files:
+            image_path = os.path.join(correct_video_path, img_name)
+            image = Image.open(image_path).convert("RGB")
+            # print(f"Loaded GT image size: {image.size}")
+            if self.crop_type != "none":
+                if image.height == self.out_size and image.width == self.out_size:
+                    image = np.array(image)
+                else:
+                    if self.crop_type == "center":
+                        image = center_crop_arr(image, self.out_size)
+                    elif self.crop_type == "random":
+                        image = random_crop_arr(image, self.out_size, min_crop_frac=0.7)
             else:
-                if img_name.endswith(".png"):
-                    image_path = os.path.join(video_path, img_name)
-                    # print(f"Loading {image_path}")
-                    image = Image.open(image_path).convert("RGB")
-                    # print(f"Loaded GT image size: {image.size}")
-                    if self.crop_type != "none":
-                        if image.height == self.out_size and image.width == self.out_size:
-                            image = np.array(image)
-                        else:
-                            if self.crop_type == "center":
-                                image = center_crop_arr(image, self.out_size)
-                            elif self.crop_type == "random":
-                                image = random_crop_arr(image, self.out_size, min_crop_frac=0.7)
-                    else:
-                        assert image.height == self.out_size and image.width == self.out_size
-                        image = np.array(image)
-                        # hwc, rgb, 0,255, uint8
+                assert image.height == self.out_size and image.width == self.out_size
+                image = np.array(image)
+                # hwc, rgb, 0,255, uint8
+
+            img_lq_sum = np.zeros_like(image, dtype=np.float32)
+            # NOTE: No motion-blur. Assumes SPC-fps >>> scene motion
+            N = 2**self.bits - 1
+            for i in range(N): # 3-bit (2**3 - 1)
+                if self.mosaic:
+                    img_lq_sum = img_lq_sum + self.get_mosaic(self.generate_spc_from_gt(image))
+                else:
+                    img_lq_sum = img_lq_sum + self.generate_spc_from_gt(image)
+            img_lq = img_lq_sum / (1.0*N)
+            lqs.append(img_lq)
+            gts.append(image)
+
+        if self.precomputed_latents:     
+            return torch.cat(latents, dim=0) , np.stack(gts, axis=0), np.stack(lqs, axis=0) # [T_total, 4, 64, 64]; [T_total, H, W, C]
+        else:
+            return None, np.stack(gts, axis=0), np.stack(lqs, axis=0)
+
+
+    def get_mosaic(self, img):
+        """
+            Convert a demosaiced RGB image (HxWx3) into an RGGB Bayer mosaic.
+        """
+        R = img[:, :, 0]
+        G = img[:, :, 1]
+        B = img[:, :, 2]
+
+        bayer = np.zeros_like(img)
+
+        bayer_pattern_type = random.choice(["RGGB", "GRBG", "BGGR", "GBRG"])
+
+        if bayer_pattern_type == "RGGB":
+            # Red
+            bayer[0::2, 0::2, 0] = R[0::2, 0::2]
+            # Green
+            bayer[0::2, 1::2, 1] = G[0::2, 1::2]
+            bayer[1::2, 0::2, 1] = G[1::2, 0::2]
+            # Blue
+            bayer[1::2, 1::2, 2] = B[1::2, 1::2]
+        elif bayer_pattern_type == "GRBG":
+            # Red
+            bayer[0::2, 1::2, 0] = R[0::2, 1::2]
+            # Green 
+            bayer[0::2, 0::2, 1] = G[0::2, 0::2]
+            bayer[1::2, 1::2, 1] = G[1::2, 1::2]
+            # Blue
+            bayer[1::2, 0::2, 2] = B[1::2, 0::2]
             
-                    gt_images.append(image)
-                    frame_counter += 1
-                    if frame_counter == 64:
-                        break
+        elif bayer_pattern_type == "BGGR":
+            # Blue
+            bayer[0::2, 0::2, 2] = B[0::2, 0::2]
+            # Green
+            bayer[0::2, 1::2, 1] = G[0::2, 1::2]
+            bayer[1::2, 0::2, 1] = G[1::2, 0::2]
+            # Red
+            bayer[1::2, 1::2, 0] = R[1::2, 1::2]
         
-        if self.precomputed_latents:
-            start_rdx = random.randint(0, len(latents)-max_frames-1)
-            latents = latents[start_rdx : start_rdx+max_frames]
-        else:
-            start_rdx = random.randint(0, len(gt_images)-max_frames-1)
+        else: # GBRG
+            # Green
+            bayer[0::2, 0::2, 1] = G[0::2, 0::2]
+            bayer[1::2, 1::2, 1] = G[1::2, 1::2]
+            # Blue
+            bayer[0::2, 1::2, 2] = B[0::2, 1::2]
+            # Red
+            bayer[1::2, 0::2, 0] = R[1::2, 0::2]
 
-        gt_images = gt_images[start_rdx: start_rdx+max_frames]
+        return bayer
 
-        if self.precomputed_latents:
-            return torch.cat(latents, dim=0), np.stack(gt_images, axis=0) # t x 4 x 64 x 64, t h w c
-        else:
-            return np.stack(gt_images, axis=0) # thwc
-
-
-    def generate_spc_from_gt(self, img_gt):
+    def generate_spc_from_gt(self, img_gt, N=1):
         if img_gt is None:
             return None
         img = srgb_to_linearrgb(img_gt / 255.)
+        # TODO: Add linearrgb to spad curve 
         img = emulate_spc(img, 
-                          factor=1.0 # Brightness directly proportional to this hparam. 1.0 => scene's natural lighting
+                          factor= 1. / N # Brightness directly proportional to this hparam. 1.0 => scene's natural lighting
                         )
         return img
 
-
-    def convert_to_Nbit_spc(self, imgs_gt: npt.NDArray, bits: int = 3):
-        N = 2**bits - 1
-        imgs_lq = []
-        for img_gt in imgs_gt:
-            img_lq_sum = np.zeros_like(img_gt, dtype=np.float32)
-            for i in range(N): # 4-bit (2**4 - 1)
-                img_lq_sum = img_lq_sum + self.generate_spc_from_gt(img_gt)
-            img_lq = img_lq_sum / (1.0*N)
-            imgs_lq.append(img_lq)
-        return np.stack(imgs_lq, axis=0) # thwc
-
-
-    def __getitem__(self, index: int) -> Dict[str, Union[np.ndarray, str]]:
-        # load gt image
-        imgs_gt = None
-        imgs_lq = None
-        while imgs_gt is None and imgs_lq is None:
-            # load meta file
-            video_path = self.video_files[index]['video_path']
-            gt_video_path =  self.HARDDISK_DIR + video_path[2:]
-            # print("gt path:", gt_path)
-            # print(f"Loading GT image from {gt_path}")
-            prompt = self.video_files[index]['prompt']
-
+    def __getitem__(self, idx):
+        while True:
             try:
-                if self.precomputed_latents:
-                    latents, imgs_gt = self.load_gt_images(gt_video_path)
-                    imgs_gt = (imgs_gt / 255.0).astype(np.float32)
-                    gt = ((imgs_gt * 2) - 1).astype(np.float32)
-                    return latents, gt
-                
-                imgs_gt = self.load_gt_images(gt_video_path)
-                # print(f"Loaded {imgs_gt.shape[0]} frames from {gt_video_path}")
+                video_info = self.video_files[idx]
+                video_path = video_info["video_path"]
+                # print(f"Loading video from {video_path}")
+                latents, gts, lqs = self._load_video(video_path)
+                break
             except Exception as e:
-                print(e)
-                print(f"Could not load: {gt_video_path}, setting a random index")
-                index = random.randint(0, len(self) - 1)
-                continue
-            
-            if imgs_gt is None:
-                print(f"failed to load {gt_video_path} or generate lq image, try another image")
-                index = random.randint(0, len(self) - 1)
-                continue
+                print(f"Error loading video from {video_path}: {e}")
+                # reset idx
+                idx = random.randint(0, len(self.video_files) - 1)
 
-            # NOTE: SPAD bit-resolution was changed permanently --- No need for 1-bit VAEs
-            # However, to revert back... uncomment:
-            # img_lq = self.generate_spc_from_gt(img_gt)
-            # And comment the following
-            
-            spc_bits = 3 # bits
-            imgs_lq = self.convert_to_Nbit_spc(imgs_gt, bits=spc_bits)
-
-
-        # Shape: (t, h, w, c); channel order: RGB; image range: [0, 1], float32.
-        imgs_gt = (imgs_gt / 255.0).astype(np.float32)
-        imgs_lq = imgs_lq.astype(np.float32) # BUG-FIXED now!!! for all datasets img_lq is already [0,1], no need to divide by 255
-
-        # if self.use_hflip and np.random.uniform() < 0.5:
-        #     img_gt = np.fliplr(img_gt)
-        #     img_lq = np.fliplr(img_lq)
-
-        # Should lq be normalized to [-1,1] or stay in [0, 1] range? For now [-1, 1]
-        gt = (imgs_gt * 2 - 1).astype(np.float32)
-        # [-1, 1]
-        lq = (imgs_lq * 2 - 1).astype(np.float32) 
-        # print(np.amax(lq), np.amin(lq))
-        return gt, lq, prompt, gt_video_path
-
-
-    def __len__(self) -> int:
-        return len(self.video_files)
+        gts = (gts / 255.0).astype(np.float32)
+        gts = (gts * 2) - 1
+        lqs = ((lqs*2) - 1).astype(np.float32)
+        
+        chunk_size = min(self.chunk_size, gts.shape[0])
+        T_total = gts.shape[0]
+        start_idx = random.randint(0, max(0, T_total - chunk_size)) if T_total > chunk_size else 0
+        
+        gt_chunk = gts[start_idx:start_idx + chunk_size] 
+        lq_chunk = lqs[start_idx:start_idx + chunk_size]
+        if self.precomputed_latents:
+            chunk = latents[start_idx:start_idx + chunk_size]  # [T, C, H, W]
+            return {"latents": chunk,        # [T, C, H, W]
+                    "gts": gt_chunk, 
+                    "lqs": lq_chunk}  # [T, H, W, C], [-1, 1], float32
+        else:
+            return {"gts": gt_chunk, "lqs": lq_chunk}
     
 
 if __name__ == "__main__":
-    # Testing/Example usage
-    dataset = SPCVideoDataset(
+    dataset = VideoDataset(
         file_list="/media/agarg54/Extreme SSD/video_dataset_txt_files/udm10.txt",
         file_backend_cfg={"target": "gqvr.dataset.file_backend.HardDiskBackend"},
         out_size=512,
         crop_type="center",
         use_hflip=False,
-        precomputed_latents=False
+        precomputed_latents=False,
+        sliding_window=28,
+        chunk_size=30
     )
-    print(f"Complete Dataset length: {len(dataset)}")
-    sample = next(iter(dataset))
-    print(f"Sample GT shape: {sample[0].shape}, LQ shape: {sample[1].shape}, Prompt: {sample[2]}, Video Path: {sample[3]}")
-    print(f"GT Range: {np.amax(sample[0])} | {np.amin(sample[0])}")
-    print(f"SPC Range: {np.amax(sample[1])} | {np.amin(sample[1])}")
-    # import matplotlib.pyplot as plt
-    # plt.imsave("GT.png", (sample[0] - np.amin(sample[0])) / (np.amax(sample[0]) - np.amin(sample[0])))
-    # plt.imsave("SPC.png", (sample[1] - np.amin(sample[1])) / (np.amax(sample[1]) - np.amin(sample[1])))
+    dataloader = data.DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0)
+    for i, batch in enumerate(dataloader):
+        print(i)
+        print(batch["gts"].shape)
+        print(batch["lqs"].shape)

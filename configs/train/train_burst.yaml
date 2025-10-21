@@ -1,12 +1,12 @@
-output_dir: /media/agarg54/Extreme SSD/code/gQVR/experiments_lqRAFT
+output_dir: /media/agarg54/Extreme SSD/code/gQVR/experiments_burst
 
 dataset:
   batch_transform:
       target: gqvr.dataset.batch_transform.IdentityBatchTransform
   train:
     batch_size: 1
-    num_workers: 24
-    target: gqvr.dataset.spc_video_streaming.SlidingLatentVideoDataset
+    num_workers: 8
+    target: gqvr.dataset.spc_video.VideoDataset
     params:
       file_list: /media/agarg54/Extreme SSD/video_dataset_txt_files/combined_video_dataset.txt
       file_backend_cfg:
@@ -14,7 +14,7 @@ dataset:
       out_size: 512
       crop_type: "center"
       use_hflip: False
-      precomputed_latents: True
+      precomputed_latents: false
       sliding_window: 10
       chunk_size: 11
       mosaic: false
@@ -22,7 +22,7 @@ dataset:
   val:
     batch_size: 1
     num_workers: 24
-    target: gqvr.dataset.spc_video_streaming.SlidingLatentVideoDataset
+    target: gqvr.dataset.spc_video.VideoDataset
     params:
       file_list: /home/argar/apgi/gQVR/dataset_txt_files/video_dataset_txt_files/saved_latents_vids_val.txt
       file_backend_cfg:
@@ -89,4 +89,8 @@ log_every: 500
 val_every: 1000
 resume_training: False
 
-with_unet: false
+base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
+model_t: 200
+coeff_t: 200
+lora_rank: 256
+lora_modules: [to_k, to_q, to_v, to_out.0, conv, conv1, conv2, conv_shortcut, conv_out, proj_in, proj_out, ff.net.2, ff.net.0.proj]
