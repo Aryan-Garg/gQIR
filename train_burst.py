@@ -164,7 +164,6 @@ def compute_flow_loss(pred_frames, gt_frames, raft_model):
 
 
 def compute_burst_loss(gt, xhat_lq, lpips_model, scales, loss_mode="gt_perceptual_lsa", z_gt=None, z_fused=None):
-    #  "mse_ls", "lsa_only", "lsa_gt", "lsa_gt_perceptual"
     xhat_lq_scaled = (xhat_lq * 2.0) - 1.0  # scale to [-1, 1]
 
     lsa_loss = 0.
@@ -177,11 +176,11 @@ def compute_burst_loss(gt, xhat_lq, lpips_model, scales, loss_mode="gt_perceptua
         loss_dict["lsa_loss"] = lsa_loss.item()
 
     if "gt" in loss_mode:
-        gt_loss = scales.l1 * F.l1_loss(xhat_lq.float(), gt.float(), reduction="mean")
+        gt_loss = scales.l1 * F.l1_loss(xhat_lq_scaled.float(), gt.float(), reduction="mean")
         loss_dict["l1_loss"] = gt_loss.item()
 
     if "perceptual" in loss_mode:
-        perceptual_loss = scales.perceptual * lpips_model((xhat_lq.clamp(-1,1)).float(),  
+        perceptual_loss = scales.perceptual * lpips_model((xhat_lq_scaled.clamp(-1,1)).float(),  
                                                           (gt.clamp(-1,1)).float())
         loss_dict["perceptual"] = perceptual_loss.item()
 
@@ -318,11 +317,16 @@ def main(args) -> None:
 
     batch_transform = instantiate_from_config(cfg.dataset.batch_transform)
 
-    ls_burst_unet, fusion_vit, opt, loader = accelerator.prepare(
-        ls_burst_unet, fusion_vit, opt, loader
-    )
-    ls_burst_unet = accelerator.unwrap_model(ls_burst_unet) 
-    fusion_vit    = accelerator.unwrap_model(fusion_vit) 
+    if cfg.use_unet:
+        ls_burst_unet, fusion_vit, opt, loader = accelerator.prepare(
+            ls_burst_unet, fusion_vit, opt, loader
+        )
+        ls_burst_unet = accelerator.unwrap_model(ls_burst_unet) 
+    else:
+        fusion_vit, opt, loader = accelerator.prepare(
+            fusion_vit, opt, loader
+        )
+    fusion_vit = accelerator.unwrap_model(fusion_vit) 
 
     # Variables for monitoring/logging purposes:
     global_step = 0
@@ -516,11 +520,12 @@ def main(args) -> None:
             # Save checkpoint:
             if global_step % cfg.checkpointing_steps == 0:
                 if accelerator.is_local_main_process:
-                    checkpoint = ls_burst_unet.state_dict()
+                    if cfg.use_unet:
+                        checkpoint = ls_burst_unet.state_dict()
+                        ckpt_path = f"{ckpt_dir}/ls_burst_unet_{global_step:07d}.pt"
+                        torch.save(checkpoint, ckpt_path)
                     checkpoint_vit = fusion_vit.state_dict()
-                    ckpt_path = f"{ckpt_dir}/ls_burst_unet_{global_step:07d}.pt"
                     ckpt_path_vit = f"{ckpt_dir}/fusion_vit_{global_step:07d}.pt"
-                    torch.save(checkpoint, ckpt_path)
                     torch.save(checkpoint_vit, ckpt_path_vit)
                     
 
