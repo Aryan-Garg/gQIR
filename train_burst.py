@@ -165,16 +165,19 @@ def compute_flow_loss(pred_frames, gt_frames, raft_model):
 
 def compute_burst_loss(gt, xhat_lq, lpips_model, scales, loss_mode="gt_perceptual_lsa", z_gt=None, z_fused=None):
     #  "mse_ls", "lsa_only", "lsa_gt", "lsa_gt_perceptual"
+    xhat_lq_scaled = (xhat_lq * 2.0) - 1.0  # scale to [-1, 1]
+
     lsa_loss = 0.
-    # ls_loss = 0.
     gt_loss = 0.
     perceptual_loss = 0.
     loss_dict = {"lsa_loss": lsa_loss, "perceptual": perceptual_loss, "l1_loss": gt_loss}
+
     if "lsa" in loss_mode:
         lsa_loss = scales.lsa * F.l1_loss(z_fused, z_gt, reduction="mean")
         loss_dict["lsa_loss"] = lsa_loss.item()
-    elif "gt" in loss_mode:
-        gt_loss = scales.l1 * F.l1_loss(xhat_lq, gt, reduction="mean")
+
+    if "gt" in loss_mode:
+        gt_loss = scales.l1 * F.l1_loss(xhat_lq.float(), gt.float(), reduction="mean")
         loss_dict["l1_loss"] = gt_loss.item()
 
     if "perceptual" in loss_mode:
