@@ -169,10 +169,10 @@ def compute_burst_loss(gt, xhat_lq, lpips_model, scales, loss_mode="gt_perceptua
     # ls_loss = 0.
     gt_loss = 0.
     perceptual_loss = 0.
-    loss_dict = {"lsa": lsa_loss, "perceptual": perceptual_loss, "l1_loss": gt_loss}
+    loss_dict = {"lsa_loss": lsa_loss, "perceptual": perceptual_loss, "l1_loss": gt_loss}
     if "lsa" in loss_mode:
         lsa_loss = scales.lsa * F.l1_loss(z_fused, z_gt, reduction="mean")
-        loss_dict["lsa"] = lsa_loss.item()
+        loss_dict["lsa_loss"] = lsa_loss.item()
     elif "gt" in loss_mode:
         gt_loss = scales.l1 * F.l1_loss(xhat_lq, gt, reduction="mean")
         loss_dict["l1_loss"] = gt_loss.item()
