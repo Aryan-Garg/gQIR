@@ -22,7 +22,7 @@ from peft import LoraConfig
 
 # Debugging libs: ###############
 # import matplotlib.pyplot as plt
-# import numpy as np
+import numpy as np
 #################################
 
 from gqvr.utils.common import instantiate_from_config, calculate_psnr_pt, to
@@ -31,6 +31,7 @@ from gqvr.model.vae import AutoencoderKL
 from gqvr.model.core_raft.raft import RAFT
 from gqvr.model.core_raft.utils import flow_viz
 from gqvr.model.core_raft.utils.utils import InputPadder
+from gqvr.model.fusionViT import LightweightHybrid3DFusion
 
 import cv2
 from PIL import Image
@@ -162,25 +163,26 @@ def compute_flow_loss(pred_frames, gt_frames, raft_model):
     return warping_error 
 
 
-def compute_burst_loss(gt, xhat_lq, lpips_model, scales, loss_mode="gt_perceptual"):
+def compute_burst_loss(gt, xhat_lq, lpips_model, scales, loss_mode="gt_perceptual_lsa", z_gt=None, z_fused=None):
     #  "mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual"
-    mse_loss = 0.
+    lsa_loss = 0.
     # ls_loss = 0.
     gt_loss = 0.
     perceptual_loss = 0.
-    loss_dict = {"mse": mse_loss, "perceptual": perceptual_loss, "l1_loss": gt_loss}
-    if "mse" in loss_mode:
-        mse_loss = scales.mse * F.mse_loss(xhat_lq, gt, reduction="sum")
-        loss_dict["mse"] = mse_loss.item()
+    loss_dict = {"lsa": lsa_loss, "perceptual": perceptual_loss, "l1_loss": gt_loss}
+    if "lsa" in loss_mode:
+        lsa_loss = scales.lsa * F.l1_loss(z_fused, z_gt, reduction="mean")
+        loss_dict["lsa"] = lsa_loss.item()
     elif "gt" in loss_mode:
-        gt_loss = scales.l1 * F.l1_loss(xhat_lq, gt, reduction="sum")
+        gt_loss = scales.l1 * F.l1_loss(xhat_lq, gt, reduction="mean")
         loss_dict["l1_loss"] = gt_loss.item()
 
     if "perceptual" in loss_mode:
-        perceptual_loss = scales.perceptual * lpips_model(xhat_lq, gt)
+        perceptual_loss = scales.perceptual * lpips_model((xhat_lq.clamp(-1,1)).float(),  
+                                                          (gt.clamp(-1,1)).float())
         loss_dict["perceptual"] = perceptual_loss.item()
 
-    total_loss = mse_loss + gt_loss + perceptual_loss
+    total_loss = lsa_loss + gt_loss + perceptual_loss
     return total_loss, loss_dict
 
 
@@ -242,6 +244,10 @@ def main(args) -> None:
     raft_model.load_state_dict(corrected_state_dict)
     raft_model.eval().requires_grad_(False).to(device)
 
+    # Replace naive averaging with a learned residual solution
+    fusion_vit = LightweightHybrid3DFusion()
+    fusion_vit.train().requires_grad_(True)
+
     tokenizer = CLIPTokenizer.from_pretrained(cfg.base_model_path, subfolder="tokenizer")
     text_encoder = CLIPTextModel.from_pretrained(cfg.base_model_path, subfolder="text_encoder", dtype=weight_dtype).to(device)
     text_encoder.eval().requires_grad_(False)
@@ -280,13 +286,15 @@ def main(args) -> None:
     print(f"\n[~] All RAFT model parameters: {(sum(p.numel() for p in raft_model.parameters())) / 1e6:.2f}M")
     # print(f"[~] All trainable VAE model parameters: {sum(p.numel() for p in vae.parameters() if p.requires_grad) / 1e6:.2f}M")
     print(f"[~] All VAE model parameters: {sum(p.numel() for p in vae.parameters()) / 1e6:.2f}M")
-    print(f"[~] All trainable burst Layer parameters: {sum(p.numel() for p in ls_burst_unet.parameters() if p.requires_grad) / 1e6:.2f}M")
-    print(f"[~] All burst Layer parameters: {sum(p.numel() for p in ls_burst_unet.parameters()) / 1e6:.2f}M")
+    print(f"[~] All trainable fusionVIT model parameters: {sum(p.numel() for p in fusion_vit.parameters() if p.requires_grad) / 1e6:.2f}M")
+    print(f"[~] All trainable burst UNet parameters: {sum(p.numel() for p in ls_burst_unet.parameters() if p.requires_grad) / 1e6:.2f}M")
+    # print(f"[~] All trainable 3D merge module parameters: {sum(p.numel() for p in ls_burst_unet.parameters() if p.requires_grad) / 1e6:.2f}M")
+    print(f"[~] All burst UNet parameters: {sum(p.numel() for p in ls_burst_unet.parameters()) / 1e6:.2f}M")
     print(f"[~] All text encoder parameters: {(sum(p.numel() for p in text_encoder.parameters())) / 1e6:.2f}M\n")
 
     
     # Setup optimizer:
-    opt = torch.optim.AdamW(ls_burst_unet.parameters(), 
+    opt = torch.optim.AdamW(list(ls_burst_unet.parameters())+list(fusion_vit.parameters()), 
         lr=cfg.lr_burst_model, 
         **cfg.opt_kwargs)
 
@@ -301,17 +309,18 @@ def main(args) -> None:
 
     batch_transform = instantiate_from_config(cfg.dataset.batch_transform)
 
-    raft_model, opt, loader = accelerator.prepare(
-        raft_model, opt, loader
+    ls_burst_unet, fusion_vit, opt, loader = accelerator.prepare(
+        ls_burst_unet, fusion_vit, opt, loader
     )
-    raft_model = accelerator.unwrap_model(raft_model) 
+    ls_burst_unet = accelerator.unwrap_model(ls_burst_unet) 
+    fusion_vit    = accelerator.unwrap_model(fusion_vit) 
 
     # Variables for monitoring/logging purposes:
     global_step = 0
     max_steps = cfg.max_train_steps
     step_l1_loss = []
     step_perceptual_loss = []
-    step_flow_loss = []
+    step_lsa_loss = []
     epoch = 0
     epoch_loss = []
 
@@ -345,26 +354,27 @@ def main(args) -> None:
             gts = batch["gts"].permute(0, 1, 4, 2, 3) # B T C H W to match decoder output
             T = lqs.size(1)
             center_gt = gts[:, T // 2, ...] # B 3 H W
+        
+
             # print("Lq details:")
             # print(lqs.shape, lqs.dtype, lqs[:, T//2, ...].min(), lqs[:, T//2, ...].max())
             del gts # save VRAM
             torch.cuda.empty_cache()
 
-            reconstructed_lqs = []
             latents = []
+            Y = []
             with torch.no_grad():
+                z_center = vae.encode(center_gt).mode() # B 4 64 64
                 for t in range(T):
                     lq_t = lqs[:, t, ...] # B C H W
                     z = vae.encode(lq_t).mode()
-                    recon_lq_t = vae.decode(z)
                     latents.append(z)
-                    reconstructed_lqs.append(recon_lq_t)
-            
-            reconstructed_lqs = torch.stack(reconstructed_lqs, dim=1) # B T C H W
-
+                    lq_hat = vae.decode(z).float() # B 3 H W
+                    Y.append(lq_hat)
+          
             # Merge lqs here using RAFT
             center_t = T // 2 
-            lq_center = reconstructed_lqs[:, center_t, ...] # B C H W
+            Y = torch.stack(Y, dim=1) # B T C H W
 
             # print("Reconstructed lq details:")
             # print(lq_center.shape, lq_center.dtype, lq_center.min(), lq_center.max())
@@ -374,19 +384,21 @@ def main(args) -> None:
             # exit()
             flow_vectors = []
             for t in range(T):
-                lq_t = reconstructed_lqs[:, t, ...] # B C H W
+                lq_t = Y[:, t, ...] # B C H W
                 ls_in = lq_t.float()
-                center_in = lq_center.float()
+                center_in = Y[:, T//2, ...].float()
                 if t < center_t:
-                    _, flow_bw = raft_model(center_in, ls_in, iters=20, test_mode=True) # B 2 64 64
+                    with torch.inference_mode():
+                        _, flow_bw = raft_model(center_in, ls_in, iters=20, test_mode=True) # B 2 64 64
                 else:
-                    _, flow_bw = raft_model(ls_in, center_in, iters=20, test_mode=True) # B 2 64 64
+                    with torch.inference_mode():
+                        _, flow_bw = raft_model(ls_in, center_in, iters=20, test_mode=True) # B 2 64 64
 
                 # Downsample flow_bw to match latent space size (1, 4, 64, 64) with the highest precision possible
                 flow_bw = F.interpolate(flow_bw, size=(64, 64), mode='bilinear', align_corners=True)
                 flow_vectors.append(flow_bw)
 
-            del reconstructed_lqs, flow_vectors, lqs
+            del lqs
             torch.cuda.empty_cache()
 
             aligned_latents = []
@@ -400,9 +412,23 @@ def main(args) -> None:
                 aligned_latents.append(warped_latent)
             
             aligned_latents = torch.stack(aligned_latents, dim=1) # B T C H W
-            # Average of aligned lqs 
-            merged_latent = torch.mean(aligned_latents, dim=1, keepdim=False) # B C H W
-            del aligned_latents
+            # Average of aligned lqs ---> Changed to learned solution
+            merged_latent = fusion_vit(aligned_latents)
+
+            # DEBUG:
+            if global_step % cfg.log_every == 0:
+                # Save merged latent's 2nd channel to disk
+                merged_latent_png = (merged_latent[0, 1, ...]).detach().cpu().numpy().astype('uint8')
+                merged_latent_png = np.repeat(merged_latent_png[ :, :, np.newaxis], 3, axis=2)
+                Image.fromarray(merged_latent_png).save(os.path.join(exp_dir, f"merged_latent_{global_step:06d}.png"))
+
+                # Save center latent's 2nd channel to disk
+                center_latent = latents[center_t]
+                center_latent_png = (center_latent[0, 1, ...]).detach().cpu().numpy().astype('uint8')
+                center_latent_png = np.repeat(center_latent_png[:, :, np.newaxis], 3, axis=2)
+                Image.fromarray(center_latent_png).save(os.path.join(exp_dir, f"center_latent_{global_step:06d}.png"))
+
+            del aligned_latents, flow_vectors, latents
             torch.cuda.empty_cache()
 
             if cfg.use_unet:
@@ -420,15 +446,19 @@ def main(args) -> None:
                 decoded_refined = vae.decode(merged_latent).float() # B 3 H W
 
             with torch.amp.autocast("cuda", dtype=torch.float16):
-                loss, loss_dict = compute_burst_loss(center_gt, decoded_refined, lpips_model, scales=cfg.loss_scales, loss_mode="gt_perceptual")
+                loss, loss_dict = compute_burst_loss(center_gt, decoded_refined, lpips_model, scales=cfg.loss_scales, 
+                                                     loss_mode="gt_perceptual_lsa", z_gt=z_center, z_fused=merged_latent)
             
             accelerator.backward(loss)
+            accelerator.clip_grad_norm_(fusion_vit.parameters(), 1.0)
+            accelerator.clip_grad_norm_(ls_burst_unet.parameters(), 1.0)
             opt.step()
             opt.zero_grad()
             accelerator.wait_for_everyone()
 
             pbar.update(1)
             global_step += 1
+            step_lsa_loss.append(loss_dict["lsa_loss"])
             step_l1_loss.append(loss_dict["l1_loss"])
             step_perceptual_loss.append(loss_dict["perceptual"])
             epoch_loss.append(loss.item())
@@ -450,14 +480,22 @@ def main(args) -> None:
                     .mean()
                     .item()
                 )
+                avg_lsa_loss = (
+                    accelerator.gather(
+                        torch.tensor(step_lsa_loss, device=device).unsqueeze(0)
+                    )
+                    .mean()
+                    .item()
+                )
 
-                step_flow_loss.clear()
+                step_lsa_loss.clear()
                 step_l1_loss.clear()
                 step_perceptual_loss.clear()
 
                 if accelerator.is_local_main_process:
                     writer.add_scalar("train/l1_loss_step", avg_l1_loss, global_step)
                     writer.add_scalar("train/perceptual_loss_step", avg_perceptual_loss, global_step)
+                    writer.add_scalar("train/lsa_loss_step", avg_lsa_loss, global_step)
 
             # Save out & gt on disk
             if global_step % cfg.log_every == 0 or global_step == 1:
@@ -470,8 +508,11 @@ def main(args) -> None:
             if global_step % cfg.checkpointing_steps == 0:
                 if accelerator.is_local_main_process:
                     checkpoint = ls_burst_unet.state_dict()
+                    checkpoint_vit = fusion_vit.state_dict()
                     ckpt_path = f"{ckpt_dir}/ls_burst_unet_{global_step:07d}.pt"
+                    ckpt_path_vit = f"{ckpt_dir}/fusion_vit_{global_step:07d}.pt"
                     torch.save(checkpoint, ckpt_path)
+                    torch.save(checkpoint_vit, ckpt_path_vit)
                     
 
             if global_step == max_steps:

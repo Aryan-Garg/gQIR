@@ -1,4 +1,4 @@
-output_dir: /media/agarg54/Extreme SSD/code/gQVR/experiments_burst_s1Y
+output_dir: /media/agarg54/Extreme SSD/code/gQVR/experiments_burst_fusionVIT
 
 dataset:
   batch_transform:
@@ -66,11 +66,11 @@ lifting_training: true
 qvae_path: "/media/agarg54/Extreme SSD/weights/gqvr_sd21/3bit_vae_10xlr_8xBS/0600000.pt"
 
 # Loss params
-loss_mode: "gt_perceptual" # "flow" must | optional: ["l1", "perceptual"] 
+loss_mode: "gt_perceptual_lsa" # "flow" must | optional: ["l1", "perceptual", "lsa"] 
 loss_scales:
   l1: 1.
   perceptual: 50.
-  mse: 0.
+  lsa: 0.1
 
 
 lr_burst_model: 1e-5
@@ -84,9 +84,7 @@ max_train_steps: 100000
 checkpointing_steps: 1000
 checkpoints_total_limit: None
 resume_from_checkpoint: ~
-log_image_steps: 1000
 log_every: 500
-val_every: 1000
 resume_training: False
 
 use_unet: true
