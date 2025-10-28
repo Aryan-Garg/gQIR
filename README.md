@@ -55,7 +55,7 @@ Keep changing the main function for now (make it arg passing only during deploym
 Key insight: Second channel of the encoded latents have the most semantic information which enables flow warping to the center channel for burst refinement. However 4x upscaling is still required to compute flow.
 
 > CUDA_VISIBLE_DEVICES=1 python3 train_burst.py --config configs/train/train_burst.yaml (for comparison with QUIVER & QBP)
-> CUDA_VISIBLE_DEVICES=1 python3 train_burst.py --config configs/train/train_burst_mosaic.yaml
+> CUDA_VISIBLE_DEVICES=1 python3 train_burst.py --config configs/train/train_burst_mosaic.yaml (color-burst model)
 
 #### Stage 4 - Image Prior Lifting to Video Stabilization Model
 
