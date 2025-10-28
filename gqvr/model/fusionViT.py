@@ -104,7 +104,7 @@ class LightweightHybrid3DFusion(nn.Module):
         # gating and final residual projection
         self.gate = nn.Sequential(nn.Linear(embed_dim, embed_dim//4), nn.GELU(),
                                   nn.Linear(embed_dim//4, 1), nn.Sigmoid())
-        self.final_scale = nn.Parameter(torch.tensor(1.0))  # scale residual if needed
+        self.final_scale = nn.Parameter(torch.tensor(1.0))    # scale residual if needed
         self.temp_param = nn.Parameter(torch.tensor(0.1))     # initial temperature
         self.sigma_param = nn.Parameter(torch.tensor(2.0))    # initial Gaussian width
         
