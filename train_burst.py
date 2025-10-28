@@ -164,7 +164,7 @@ def compute_flow_loss(pred_frames, gt_frames, raft_model):
 
 
 def compute_burst_loss(gt, xhat_lq, lpips_model, scales, loss_mode="gt_perceptual_lsa", z_gt=None, z_fused=None):
-    #  "mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual"
+    #  "mse_ls", "lsa_only", "lsa_gt", "lsa_gt_perceptual"
     lsa_loss = 0.
     # ls_loss = 0.
     gt_loss = 0.
@@ -248,53 +248,59 @@ def main(args) -> None:
     fusion_vit = LightweightHybrid3DFusion()
     fusion_vit.train().requires_grad_(True)
 
-    tokenizer = CLIPTokenizer.from_pretrained(cfg.base_model_path, subfolder="tokenizer")
-    text_encoder = CLIPTextModel.from_pretrained(cfg.base_model_path, subfolder="text_encoder", dtype=weight_dtype).to(device)
-    text_encoder.eval().requires_grad_(False)
-
-    def encode_prompt(prompt):
-        txt_ids = tokenizer(
-            prompt,
-            max_length=tokenizer.model_max_length,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        ).input_ids
-        text_embed = text_encoder(txt_ids.to(accelerator.device))[0]
-        return {"text_embed": text_embed}
+    if cfg.use_unet:
+        print("[~] Using burst UNet refinement module")
+        tokenizer = CLIPTokenizer.from_pretrained(cfg.base_model_path, subfolder="tokenizer")
+        text_encoder = CLIPTextModel.from_pretrained(cfg.base_model_path, subfolder="text_encoder", dtype=weight_dtype).to(device)
+        text_encoder.eval().requires_grad_(False)
     
-    scheduler = DDPMScheduler.from_pretrained(cfg.base_model_path, subfolder="scheduler")
-    ls_burst_unet = UNet2DConditionModel.from_pretrained(cfg.base_model_path, 
-                                                         subfolder="unet", 
-                                                         torch_dtype=torch.bfloat16).to(device)
-    ls_burst_unet.eval().requires_grad_(False)
-
-    target_modules = cfg.lora_modules
-    G_lora_cfg = LoraConfig(
-        r=cfg.lora_rank,
-        lora_alpha=cfg.lora_rank,
-        init_lora_weights="gaussian",
-        target_modules=target_modules,
-    )
-    ls_burst_unet.add_adapter(G_lora_cfg)
-    lora_params = list(filter(lambda p: p.requires_grad, ls_burst_unet.parameters()))
-    assert lora_params, "Failed to find lora parameters"
-    for p in lora_params:
-        p.data = p.to(torch.float32)
+        def encode_prompt(prompt):
+            txt_ids = tokenizer(
+                prompt,
+                max_length=tokenizer.model_max_length,
+                padding="max_length",
+                truncation=True,
+                return_tensors="pt",
+            ).input_ids
+            text_embed = text_encoder(txt_ids.to(accelerator.device))[0]
+            return {"text_embed": text_embed}
+         
+        
+        scheduler = DDPMScheduler.from_pretrained(cfg.base_model_path, subfolder="scheduler")
+        ls_burst_unet = UNet2DConditionModel.from_pretrained(cfg.base_model_path, 
+                                                             subfolder="unet", 
+                                                             torch_dtype=torch.bfloat16).to(device)
+        ls_burst_unet.eval().requires_grad_(False)
+    
+        target_modules = cfg.lora_modules
+        G_lora_cfg = LoraConfig(
+            r=cfg.lora_rank,
+            lora_alpha=cfg.lora_rank,
+            init_lora_weights="gaussian",
+            target_modules=target_modules,
+        )
+        ls_burst_unet.add_adapter(G_lora_cfg)
+        lora_params = list(filter(lambda p: p.requires_grad, ls_burst_unet.parameters()))
+        assert lora_params, "Failed to find lora parameters"
+        for p in lora_params:
+            p.data = p.to(torch.float32)
 
     # print(f"\n[~] All trainable RAFT model parameters: {(sum(p.numel() for p in raft_model.parameters() if p.requires_grad)) / 1e6:.2f}M")
     print(f"\n[~] All RAFT model parameters: {(sum(p.numel() for p in raft_model.parameters())) / 1e6:.2f}M")
     # print(f"[~] All trainable VAE model parameters: {sum(p.numel() for p in vae.parameters() if p.requires_grad) / 1e6:.2f}M")
     print(f"[~] All VAE model parameters: {sum(p.numel() for p in vae.parameters()) / 1e6:.2f}M")
     print(f"[~] All trainable fusionVIT model parameters: {sum(p.numel() for p in fusion_vit.parameters() if p.requires_grad) / 1e6:.2f}M")
-    print(f"[~] All trainable burst UNet parameters: {sum(p.numel() for p in ls_burst_unet.parameters() if p.requires_grad) / 1e6:.2f}M")
-    # print(f"[~] All trainable 3D merge module parameters: {sum(p.numel() for p in ls_burst_unet.parameters() if p.requires_grad) / 1e6:.2f}M")
-    print(f"[~] All burst UNet parameters: {sum(p.numel() for p in ls_burst_unet.parameters()) / 1e6:.2f}M")
-    print(f"[~] All text encoder parameters: {(sum(p.numel() for p in text_encoder.parameters())) / 1e6:.2f}M\n")
-
+    if cfg.use_unet:
+        print(f"[~] All trainable burst UNet parameters: {sum(p.numel() for p in ls_burst_unet.parameters() if p.requires_grad) / 1e6:.2f}M")
+        # print(f"[~] All trainable 3D merge module parameters: {sum(p.numel() for p in ls_burst_unet.parameters() if p.requires_grad) / 1e6:.2f}M")
+        print(f"[~] All burst UNet parameters: {sum(p.numel() for p in ls_burst_unet.parameters()) / 1e6:.2f}M")
+        print(f"[~] All text encoder parameters: {(sum(p.numel() for p in text_encoder.parameters())) / 1e6:.2f}M\n")
     
     # Setup optimizer:
-    opt = torch.optim.AdamW(list(ls_burst_unet.parameters())+list(fusion_vit.parameters()), 
+    all_params = list(fusion_vit.parameters())
+    if cfg.use_unet:
+        all_params += list(ls_burst_unet.parameters())
+    opt = torch.optim.AdamW(all_params, 
         lr=cfg.lr_burst_model, 
         **cfg.opt_kwargs)
 
@@ -447,11 +453,11 @@ def main(args) -> None:
 
             with torch.amp.autocast("cuda", dtype=torch.float16):
                 loss, loss_dict = compute_burst_loss(center_gt, decoded_refined, lpips_model, scales=cfg.loss_scales, 
-                                                     loss_mode="gt_perceptual_lsa", z_gt=z_center, z_fused=merged_latent)
+                                                     loss_mode=cfg.loss_mode, z_gt=z_center, z_fused=merged_latent)
             
             accelerator.backward(loss)
-            accelerator.clip_grad_norm_(fusion_vit.parameters(), 1.0)
-            accelerator.clip_grad_norm_(ls_burst_unet.parameters(), 1.0)
+            # accelerator.clip_grad_norm_(fusion_vit.parameters(), 1.0)
+            # accelerator.clip_grad_norm_(ls_burst_unet.parameters(), 1.0)
             opt.step()
             opt.zero_grad()
             accelerator.wait_for_everyone()
