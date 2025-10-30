@@ -457,6 +457,8 @@ def main(args) -> None:
                 decoded_refined = (vae.decode(z.float() / 0.18215)).float() # B 3 H W
             else:
                 decoded_refined = vae.decode(merged_latent).float() # B 3 H W
+            
+            decoded_refined = decoded_refined.clamp(0, 1)
 
             with torch.amp.autocast("cuda", dtype=torch.float16):
                 loss, loss_dict = compute_burst_loss(center_gt, decoded_refined, lpips_model, scales=cfg.loss_scales, 

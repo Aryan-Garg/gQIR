@@ -5,7 +5,7 @@ dataset:
       target: gqvr.dataset.batch_transform.IdentityBatchTransform
   train:
     batch_size: 1
-    num_workers: 8
+    num_workers: 24
     target: gqvr.dataset.spc_video.VideoDataset
     params:
       file_list: /media/agarg54/Extreme SSD/video_dataset_txt_files/combined_video_dataset.txt
@@ -68,9 +68,9 @@ qvae_path: "/media/agarg54/Extreme SSD/weights/gqvr_sd21/3bit_vae_10xlr_8xBS/060
 # Loss params
 loss_mode: "gt_perceptual_lsa" # ["gt", "perceptual", "lsa"] 
 loss_scales:
-  l1: 50.
-  perceptual: 15.
-  lsa: 10.
+  l1: 75.
+  perceptual: 25.
+  lsa: 5.
 
 
 lr_burst_model: 1e-5
@@ -84,7 +84,7 @@ max_train_steps: 100000
 checkpointing_steps: 1000
 checkpoints_total_limit: None
 resume_from_checkpoint: ~
-log_every: 500
+log_every: 100
 resume_training: False
 
 use_unet: false
