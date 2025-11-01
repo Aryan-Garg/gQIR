@@ -6,7 +6,7 @@ dataset:
   train:
     batch_size: 1
     num_workers: 24
-    target: gqvr.dataset.spc_video_streaming.SlidingLatentVideoDataset
+    target: gqvr.dataset.spc_video.VideoDataset
     params:
       file_list: /media/agarg54/Extreme SSD/video_dataset_txt_files/combined_video_dataset.txt
       file_backend_cfg:
@@ -15,14 +15,14 @@ dataset:
       crop_type: "center"
       use_hflip: False
       precomputed_latents: True
-      sliding_window: 28
-      chunk_size: 30
+      sliding_window: 10
+      chunk_size: 11
       mosaic: true
 
   val:
     batch_size: 1
     num_workers: 24
-    target: gqvr.dataset.spc_video_streaming.SlidingLatentVideoDataset
+    target: gqvr.dataset.spc_video.VideoDataset
     params:
       file_list: /home/argar/apgi/gQVR/dataset_txt_files/video_dataset_txt_files/saved_latents_vids_val.txt
       file_backend_cfg:
@@ -30,9 +30,9 @@ dataset:
       out_size: 512
       crop_type: "center"
       use_hflip: False
-      precomputed_latents: True
-      sliding_window: 28
-      chunk_size: 30
+      precomputed_latents: false
+      sliding_window: 10
+      chunk_size: 11
     batch_transform:
       target: gqvr.dataset.batch_transform.IdentityBatchTransform
 

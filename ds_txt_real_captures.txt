@@ -1,0 +1,6 @@
+/media/agarg54/Extreme SSD/color_spad_real_dataset/christmasLights_off_vase.png
+/media/agarg54/Extreme SSD/color_spad_real_dataset/christmasLights_on.png
+/media/agarg54/Extreme SSD/color_spad_real_dataset/composite_scene_f1.png
+/media/agarg54/Extreme SSD/color_spad_real_dataset/composite_scene_f2.png
+/media/agarg54/Extreme SSD/color_spad_real_dataset/dieDrop.png
+/media/agarg54/Extreme SSD/color_spad_real_dataset/helmet.png

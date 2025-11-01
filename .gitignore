@@ -12,7 +12,7 @@
 *.pdf
 *.zip
 
-
+flow_tester.ipynb
 **pycache**
 experiments*/**
 checkpoints/**

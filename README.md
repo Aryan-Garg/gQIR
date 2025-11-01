@@ -30,9 +30,13 @@
 
 ## <a id="inference"></a>Inference 
 
-> python3 infer_sd2GAN_stage2.py --config configs/inference/eval_sd2GAN.yaml
+> python3 infer_sd2GAN_stage2.py --config configs/inference/eval_sd2GAN.yaml 
 
-Keep changing the main function for now (make it arg passing only during deployment)
+
+#### For real world captures:
+
+> python3 infer_sd2GAN_stage2.py --config configs/inference/eval_3bit_color.yaml --ds_txt ds_txt_real_captures.txt --real_captures
+
 
 ## <a id="training"></a>Training
 <!-- Arch Image -->

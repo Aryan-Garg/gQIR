@@ -137,7 +137,7 @@ class SPCDataset(data.Dataset):
 
 
             img_lq_sum = np.zeros_like(img_gt, dtype=np.float32)
-            bits = random.randint(1, 10) # mixed bit depth training
+            bits = 3 # random.randint(1, 10) # mixed bit depth training
             # NOTE: No motion-blur. Assumes SPC-fps >>> scene motion
             N = 2**bits - 1
             for i in range(N): # 4-bit (2**4 - 1)

@@ -14,9 +14,11 @@ from gqvr.utils.common import instantiate_from_config
 from gqvr.dataset.utils import srgb_to_linearrgb, emulate_spc, center_crop_arr
 from gqvr.model.generator import SD2Enhancer
 
+import matplotlib.pyplot as plt
+
 to_tensor = transforms.ToTensor()
 
-def process(image,prompt,upscale, save_Gprocessed_latents: bool = False, fname:str = "", seed=310):
+def process(image, prompt, upscale, save_Gprocessed_latents: bool = False, fname:str = "", seed=310):
     if seed == -1:
         seed = random.randint(0, 2**32 - 1)
     set_seed(seed)
@@ -25,12 +27,13 @@ def process(image,prompt,upscale, save_Gprocessed_latents: bool = False, fname:s
     if max_size is not None:
         out_w, out_h = tuple(int(x * upscale) for x in image.shape[:2])
         if out_w * out_h > max_size[0] * max_size[1]:
-            return (
+            print (
                 "Failed: The requested resolution exceeds the maximum pixel limit. "
                 f"Your requested resolution is ({out_h}, {out_w}). "
                 f"The maximum allowed pixel count is {max_size[0]} x {max_size[1]} "
                 f"= {max_size[0] * max_size[1]} :("
             )
+            return ""
         
     # TODO: Add InternVL-3 Captions 
     if prompt == "auto":
@@ -48,8 +51,10 @@ def process(image,prompt,upscale, save_Gprocessed_latents: bool = False, fname:s
             save_Gprocessed_latents=save_Gprocessed_latents,
             fname=fname 
         )[0] 
+
     except Exception as e:
-        return f"Failed: {e} :(" 
+        print(f"Failed: {e} :(")
+        return 
 
     return pil_image, f"Used prompt: {prompt}"
 
@@ -207,7 +212,7 @@ def compute_no_reference_metrics(out_img):
     return maniqa_score, clipiqa_score, musiq_score #, deqa_score
 
 
-def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False):
+def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False, idx_iter=None):
     if gt_image_path:
         gt_img = Image.open(gt_image_path)
         gt_img = gt_img.convert("RGB")
@@ -225,9 +230,6 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False)
                 else:
                     img_lq_sum = img_lq_sum + generate_spc_from_gt(gt_img)
             img_lq = img_lq_sum / (1.0*N)
-
-            # Select channel 0 of img_lq and repeat it 3 times to make it 3-channel --- monochrome results
-            # img_lq = np.repeat(img_lq[:, :, 0:1], 3, axis=2)
         else:
             img_lq = Image.open(lq_image_path)
     else:
@@ -258,15 +260,38 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False)
         lq_img_pil = Image.fromarray((img_lq*255).astype(np.uint8))#.convert('L')
         reconstructed_pil = result[-1]#.convert('L')
 
-    gt_img_pil.save(os.path.join(output_dir, f"gt_3bit_{'color' if color else 'mono'}.png"))
-    lq_img_pil.save(os.path.join(output_dir, f"lq_3bit_{'color' if color else 'mono'}.png"))
-    reconstructed_pil.save(os.path.join(output_dir, f"out_3bit_{'color' if color else 'mono'}.png"))
+    gt_img_pil.save(os.path.join(output_dir, f"gt_{'color' if color else 'mono'}_{str(idx_iter).zfill(4)}.png"))
+    lq_img_pil.save(os.path.join(output_dir, f"lq_{'color' if color else 'mono'}_{str(idx_iter).zfill(4)}.png"))
+    reconstructed_pil.save(os.path.join(output_dir, f"out_{'color' if color else 'mono'}_{str(idx_iter).zfill(4)}.png"))
 
-    # if len(result[-2]) > 50:
-    #     with open(os.path.join(output_dir, f"prompt_{}.txt"), "w") as f:
-    #         f.write(result[-2])
     return psnr, ssim, lpips, maniqa, clipiqa, musiq
 
+
+
+def eval_single_real_input(lq_image_path, color=True):
+    assert lq_image_path != None, "[!] Come on! Provide the input lq path dude!"
+    img_lq = Image.open(lq_image_path).convert('RGB')
+
+    # Resize to 512x512 & numpy-fy
+    img_lq_resized = np.array(img_lq.resize((512,512), Image.LANCZOS))[:,:,::-1]
+    # Normalize to 0..1
+    img_lq_resized = (img_lq_resized - img_lq_resized.min()) / (img_lq_resized.max() - img_lq_resized.min())
+   
+    out = process(img_lq_resized, "", upscale=1.0)
+    result = (img_lq, out[-1], out[0]) 
+    
+    output_dir = "./evaluation_real/"
+    os.makedirs(output_dir, exist_ok=True)
+
+    lq_img_pil = Image.fromarray((img_lq_resized*255.).astype(np.uint8))
+    print(np.array(out[0]).shape, np.array(out[0]).min(), np.array(out[0]).max())
+    reconstructed_pil = result[-1]
+    
+
+    reconstructed_pil = Image.fromarray(np.array(reconstructed_pil))
+    lq_img_pil.save(os.path.join(output_dir, f"{lq_image_path.split('/')[-1][:-4]}_in.png"))
+    reconstructed_pil.save(os.path.join(output_dir, f"{lq_image_path.split('/')[-1][:-4]}_out.png"))
+    return
 
 
 def save_all_video_Gprocessed_latents_to_disk(ds_txt_file):
@@ -314,6 +339,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_size", type=str, default="512,512", help="Comma-seperated image size")
     parser.add_argument("--device", type=str, default="cuda:1", help="Device to run the model on")
     parser.add_argument("--ds_txt", type=str)
+    parser.add_argument("--eval_metrics", action='store_true', help="Run SPAD simulation on GT dataset to get metrics")
+    parser.add_argument("--real_captures", action='store_true', help="Run model on 3-bit averaged bayer input")
     args = parser.parse_args()
 
     # Set device
@@ -351,35 +378,45 @@ if __name__ == "__main__":
     else:
         raise ValueError(config.base_model_type)
 
-    prefix_path = "/media/agarg54/Extreme SSD/"
-    psnr_list = []
-    ssim_list = []
-    lpips_list = []
-    maniqa_list = []
-    clipiqa_list = []
-    musiq_list = []
-    with open("/media/agarg54/Extreme SSD/dataset_txt_files/full_test_set.txt", "r") as f:
-        lines = f.readlines()
-        for line in tqdm(lines):
-            gt_image_path = os.path.join(prefix_path, line.strip()[2:])
-            metrics = eval_single_image(gt_image_path = gt_image_path, color=config.color)
-            psnr_list.append(metrics[0])
-            ssim_list.append(metrics[1])
-            lpips_list.append(metrics[2])
-            maniqa_list.append(metrics[3])
-            clipiqa_list.append(metrics[4])
-            musiq_list.append(metrics[5])
+    if args.eval_metrics:
+        prefix_path = "/media/agarg54/Extreme SSD/"
+        psnr_list = []
+        ssim_list = []
+        lpips_list = []
+        maniqa_list = []
+        clipiqa_list = []
+        musiq_list = []
+        with open("/media/agarg54/Extreme SSD/dataset_txt_files/full_test_set.txt", "r") as f:
+            lines = f.readlines()
+            curr_iter = 0
+            for line in tqdm(lines):
+                gt_image_path = os.path.join(prefix_path, line.strip()[2:])
+                metrics = eval_single_image(gt_image_path = gt_image_path, color=config.color, idx_iter=curr_iter)
+                psnr_list.append(metrics[0])
+                ssim_list.append(metrics[1])
+                lpips_list.append(metrics[2])
+                maniqa_list.append(metrics[3])
+                clipiqa_list.append(metrics[4])
+                musiq_list.append(metrics[5])
+                curr_iter += 1
 
-    with open("./evaluation/mono_full_test_SD21-3bit-Stage2.txt", "w") as f:
-        f.write("Overall scores on full_test_set:\n")
-        f.write("---------- FR scores ----------\n")
-        f.write(f"Average PSNR: {np.mean(psnr_list):.2f} dB\n")
-        f.write(f"Average SSIM: {np.mean(ssim_list):.4f}\n")
-        f.write(f"Average LPIPS: {np.mean(lpips_list):.4f}\n")
-        f.write("---------- NR scores ----------\n")
-        f.write(f"Average ManIQA: {np.mean(maniqa_list):.4f}\n")
-        f.write(f"Average ClipIQA: {np.mean(clipiqa_list):.4f}\n")
-        f.write(f"Average MUSIQ: {np.mean(musiq_list):.4f}\n")
+        with open("./evaluation/mono_full_test_SD21-3bit-Stage2.txt", "w") as f:
+            f.write("Overall scores on full_test_set:\n")
+            f.write("---------- FR scores ----------\n")
+            f.write(f"Average PSNR: {np.mean(psnr_list):.2f} dB\n")
+            f.write(f"Average SSIM: {np.mean(ssim_list):.4f}\n")
+            f.write(f"Average LPIPS: {np.mean(lpips_list):.4f}\n")
+            f.write("---------- NR scores ----------\n")
+            f.write(f"Average ManIQA: {np.mean(maniqa_list):.4f}\n")
+            f.write(f"Average ClipIQA: {np.mean(clipiqa_list):.4f}\n")
+            f.write(f"Average MUSIQ: {np.mean(musiq_list):.4f}\n")
+
+    if args.real_captures:
+        with open(args.ds_txt, "r") as f:
+            lines = f.readlines()
+            for line in tqdm(lines):
+                lq_path = line.strip()
+                eval_single_real_input(lq_image_path = lq_path)
 
     # save_all_video_Gprocessed_latents_to_disk(args.ds_txt)
         

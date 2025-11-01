@@ -635,6 +635,7 @@ class BaseTrainer:
         with self.accelerator.accumulate(self.G):
             self.unwrap_model(self.D).eval().requires_grad_(False)
             x = self.forward_generator()
+            # print(f"Gen output: {x.shape}")
             self.G_pred = x
             loss_l2 = F.mse_loss(x, self.batch_inputs.gt, reduction="mean") * self.config.lambda_l2
             loss_lpips = self.net_lpips(x, self.batch_inputs.gt).mean() * self.config.lambda_lpips
@@ -783,7 +784,7 @@ class BaseTrainer:
                         self.accelerator.log(log_dict, step=self.global_step)
                         if self.global_step % self.config.log_image_steps == 0 or self.global_step == 1:
                             self.log_videos()
-                        if self.global_step % self.config.checkpointing_steps == 0 or self.global_step == 1:
+                        if self.global_step % self.config.checkpointing_steps == 0 or self.global_step == 10:
                             self.save_checkpoint()
 
                     if self.global_step >= self.config.max_train_steps:
@@ -827,7 +828,7 @@ class BaseTrainer:
                             self.log_images()
                         if self.global_step % self.config.log_grad_steps == 0 or self.global_step == 1:
                             self.log_grads()
-                        if self.global_step % self.config.checkpointing_steps == 0 or self.global_step == 1:
+                        if self.global_step % self.config.checkpointing_steps == 0 or self.global_step == 10:
                             self.save_checkpoint()
 
                     if self.global_step >= self.config.max_train_steps:
@@ -946,9 +947,11 @@ class BaseTrainer:
     def save_checkpoint(self):
         if self.accelerator.is_main_process:
             save_path = os.path.join(self.config.output_dir, "checkpoints", f"checkpoint-{self.global_step}")
+            # self.G.to("cpu")
+            # self.G.save_lora_adapter(save_path)
             self.accelerator.save_state(save_path)
             logger.info(f"Saved state to {save_path}")
-
-            # Save ema weights
-            self.ema_handler.save_ema_weights(save_path)
-            logger.info(f"Saved ema weights to {save_path}")
+            # self.G.to(self.device)
+            # # Save ema weights
+            # self.ema_handler.save_ema_weights(save_path)
+            # logger.info(f"Saved ema weights to {save_path}")

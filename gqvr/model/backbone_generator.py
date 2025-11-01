@@ -64,32 +64,6 @@ class BaseEnhancer:
     @overload
     def forward_generator(self, z_lq: torch.Tensor) -> torch.Tensor:
         ...
-
-
-    def shift_latent_fractional(self, latent, shift_x=0.5, shift_y=0.0):
-        """Fractional shift using bilinear interpolation."""
-        print(f"[DEBUG] Original latent shape: {latent.shape} min: {latent.min()}, max: {latent.max()}")
-        B, C, H, W = latent.shape
-
-        yy, xx = torch.meshgrid(
-            torch.linspace(-1, 1, H, device=latent.device),
-            torch.linspace(-1, 1, W, device=latent.device),
-            indexing="ij"
-        )
-
-        dx = 2 * shift_x / W
-        dy = 2 * shift_y / H
-        xx = xx - dx
-        yy = yy - dy
-        grid = torch.stack((xx, yy), dim=-1).unsqueeze(0).repeat(B, 1, 1, 1).to(latent.device)
-        grid = grid.to(torch.bfloat16)
-        # print(f"[DEBUG] Grid shape {grid.shape} min: {grid.min()}, max: {grid.max()}")
-        torch.cuda.synchronize()  # make sure all kernels are done
-        shifted = F.grid_sample(latent, grid, mode='bilinear', padding_mode='border', align_corners=True)
-        torch.cuda.synchronize()  # force sync to catch GPU error right here
-        # print(f"[DEBUG] Shifted latent min: {shifted.min()}, max: {shifted.max()}", flush=True)
-        return shifted
-    
     
     @torch.no_grad()
     def enhance(self,
@@ -109,18 +83,12 @@ class BaseEnhancer:
 
         z_lq = self.vae.encode(lq.to(self.weight_dtype)).mode() 
 
-        # print(f"[DEBUG] z_lq shape: {z_lq.shape} | min: {z_lq.min()}, max: {z_lq.max()}")
-        # shift_x_int, shift_y_int = 2, 0                                                 # integer latent shift
-        # z_lq = torch.roll(z_lq, shifts=(shift_y_int, shift_x_int), dims=(2, 3))
-        # z_lq = self.shift_latent_fractional(z_lq, shift_x=2.5, shift_y=0.0)
-
         if only_vae_output:
             z = z_lq
         else:
             z = self.forward_generator(z_lq) # (N x 4 x 64 x 64) for (N, 3, 512, 512) input
 
 
-        # print(f"[DEBUG] z shape: {z.shape}")
         if save_Gprocessed_latents:
             assert fname != "", "No file name provided but save G-processed latents is on"
             torch.save(z.to(self.weight_dtype).detach().cpu(), fname)

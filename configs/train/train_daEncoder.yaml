@@ -22,7 +22,7 @@ dataset:
   train:
     target: gqvr.dataset.spc_image_only.SPCDataset
     params:
-      file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/combined_dataset.txt
+      file_list: /media/agarg54/Extreme SSD/dataset_files/combined_dataset.txt
       file_backend_cfg:
         target: gqvr.dataset.file_backend.HardDiskBackend
       out_size: 512
@@ -31,7 +31,7 @@ dataset:
   val:
     target: gqvr.dataset.spc_image_only.SPCDataset
     params:
-      file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/random_val.txt
+      file_list: /media/agarg54/Extreme SSD/dataset_txt_files/full_test_set.txt
       file_backend_cfg:
         target: gqvr.dataset.file_backend.HardDiskBackend
       out_size: 512
@@ -45,22 +45,21 @@ batch_transform:
 
 train:
   # pretrained sd v2.1-zsnr path
-  sd_path: "/home/argar/apgi/gQVR/pretrained_checkpoints/sd2.1-base-zsnr-laionaes5.ckpt"
+  sd_path: "/media/agarg54/Extreme SSD/weights/gqvr_sd21/3bit_vae_10xlr_8xBS/0600000.pt"
   # experiment directory path
-  exp_dir: /home/argar/apgi/gQVR/experiments/multi-bit
+  exp_dir: "/nobackup1/aryan/weights/continue_VAE_UA"
   learning_rate: 1e-5
   batch_size: 1
-  num_workers: 96
+  num_workers: 32
   train_steps: 3_000_000
-  log_every: 1000
-  ckpt_every: 50000
-  image_every: 5000
-  val_every: 5000
+  log_every: 500
+  ckpt_every: 1000
+  image_every: 200
+  val_every: 500
   # Loss params
-  loss_mode: "ls_gt_perceptual" # "mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual"
+  loss_mode: "mse_ls_gt_perceptual" # "mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual"
   loss_scales:
-    lsa: 0.01
-    mse: 0.
-    gt: 1.
-    perceptual_gt: 50.
-    perceptual_lq: 50.
+    lsa: 0.1
+    mse: 1000.
+    gt: 100.
+    perceptual: 2.

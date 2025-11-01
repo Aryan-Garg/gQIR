@@ -25,7 +25,7 @@ from gqvr.utils.common import instantiate_from_config, calculate_psnr_pt, to
 from gqvr.model.vae import AutoencoderKL
 
 
-def compute_loss(gt, z_gt, z_pred, xhat_gt, xhat_lq, lpips_model, loss_mode, scales):
+def compute_loss(gt, z_gt, z_pred, xhat_lq, lpips_model, loss_mode, scales):
     #  "mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual"
     mse_loss = 0.
     ls_loss = 0.
@@ -33,17 +33,16 @@ def compute_loss(gt, z_gt, z_pred, xhat_gt, xhat_lq, lpips_model, loss_mode, sca
     perceptual_loss = 0.
     loss_dict = {"mse": mse_loss, "lsa": ls_loss, "perceptual": perceptual_loss, "gt_loss": gt_loss}
     if "ls" in loss_mode:
-        ls_loss = scales.lsa * F.mse_loss(z_pred, z_gt, reduction="sum")
+        ls_loss = scales.lsa * F.mse_loss(z_pred, z_gt, reduction="mean")
         loss_dict["lsa"] = ls_loss.item()
         if "mse" in loss_mode:
-            mse_loss = scales.mse * F.mse_loss(xhat_lq, xhat_gt, reduction="sum")
+            mse_loss = scales.mse * F.mse_loss(xhat_lq, gt, reduction="mean")
             loss_dict["mse"] = mse_loss.item()
-        elif "gt" in loss_mode:
-            gt_loss = scales.gt * F.l1_loss(xhat_gt, gt, reduction="sum")
+        if "gt" in loss_mode:
+            gt_loss = scales.gt * F.l1_loss(xhat_lq, gt, reduction="mean")
             loss_dict["gt_loss"] = gt_loss.item()
         if "perceptual" in loss_mode:
-            perceptual_loss = (scales.perceptual_gt * lpips_model(xhat_gt, gt)) + \
-                (scales.perceptual_lq * lpips_model(xhat_lq, gt))
+            perceptual_loss = scales.perceptual * lpips_model(xhat_lq, gt)
             loss_dict["perceptual"] = perceptual_loss.item()
     else:
         raise NotImplementedError("[!] Always use Latent Space Alignment (LSA) loss")
@@ -58,7 +57,7 @@ def main(args) -> None:
     set_seed(310)
     device = accelerator.device
     cfg = OmegaConf.load(args.config)
-    assert cfg.train.loss_mode in ["mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual"], f"Please choose a supported loss_mode from: ['mse_ls', 'ls_only', 'ls_gt', 'ls_gt_perceptual']"
+    assert cfg.train.loss_mode in ["mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual", "mse_ls_gt_perceptual"], f"Please choose a supported loss_mode from: ['mse_ls', 'ls_only', 'ls_gt', 'ls_gt_perceptual']"
     # Setup an experiment folder:
     if accelerator.is_main_process:
         exp_dir = cfg.train.exp_dir
@@ -69,10 +68,10 @@ def main(args) -> None:
 
 
     # Create & load VAE from pretrained SD model:
-    sd = torch.load(cfg.train.sd_path, map_location="cpu")["state_dict"]
+    sd = torch.load(cfg.train.sd_path, map_location="cpu")
     vae = AutoencoderKL(cfg.model.vae_cfg.ddconfig, cfg.model.vae_cfg.embed_dim)
-    vae_sd = {k.replace("first_stage_model.", ""): v for k, v in sd.items() if k.startswith("first_stage_model.")}
-    missing_keys, unexpected_keys = vae.load_state_dict(vae_sd, strict=False)
+    # vae_sd = {k.replace("first_stage_model.", ""): v for k, v in sd.items() if k.startswith("first_stage_model.")}
+    missing_keys, unexpected_keys = vae.load_state_dict(sd, strict=True)
     if accelerator.is_main_process:
         print(
             f"Load pretrained SD weight from {cfg.train.sd_path}\n"
@@ -81,17 +80,24 @@ def main(args) -> None:
         )
     
     # Make the encoder & quant_conv trainable and rest frozen
-    for name, p in vae.named_parameters():
-        p.requires_grad = True if "encoder" in name else False
-        if "quant_conv" in name and not "post" in name:
-            p.requires_grad = True 
-        # print(f"{name} -> {p.shape} isTrainable? {p.requires_grad}")
+    if args.unfreezeAll:
+        vae.requires_grad_(True)
+        opt = torch.optim.AdamW(
+            list(vae.parameters()), 
+            lr=cfg.train.learning_rate, 
+            weight_decay=0)
+    else:
+        for name, p in vae.named_parameters():
+            p.requires_grad = True if "encoder" in name else False
+            if "quant_conv" in name and not "post" in name:
+                p.requires_grad = True 
+            # print(f"{name} -> {p.shape} isTrainable? {p.requires_grad}")
 
-    # Setup optimizer:
-    opt = torch.optim.AdamW(
-        list(vae.encoder.parameters()) + list(vae.quant_conv.parameters()), 
-        lr=cfg.train.learning_rate, 
-        weight_decay=0)
+        # Setup optimizer:
+        opt = torch.optim.AdamW(
+            list(vae.encoder.parameters()) + list(vae.quant_conv.parameters()), 
+            lr=cfg.train.learning_rate, 
+            weight_decay=0)
 
     # Setup data:
     dataset = instantiate_from_config(cfg.dataset.train)
@@ -121,11 +127,6 @@ def main(args) -> None:
         vae, opt, loader, val_loader
     )
     vae = accelerator.unwrap_model(vae)
-
-    # for name, p in vae.named_parameters():
-    #     print(f"{name} -> {p.shape} isTrainable? {p.requires_grad}")
-    # print("Printed after accelerator prepares")
-    # exit()
 
     # Variables for monitoring/logging purposes:
     global_step = 0
@@ -169,11 +170,13 @@ def main(args) -> None:
             lq = rearrange(lq, "b h w c -> b c h w").contiguous().float()
 
             # Train step:
-            gt_latent = vae.encode(gt).mode()
+            with torch.no_grad():
+                gt_latent = vae.encode(gt).mode()
+
             pred_latent = vae.encode(lq).mode()
-            xhat_lq = vae.decode(pred_latent)
-            xhat_gt = vae.decode(gt_latent)
-            loss, loss_dict = compute_loss(gt, gt_latent, pred_latent, xhat_gt, xhat_lq, 
+            xhat_lq = vae.decode(pred_latent).clamp(0,1)
+
+            loss, loss_dict = compute_loss((gt+1.)/2., gt_latent, pred_latent, xhat_lq, 
                                            lpips_model, cfg.train.loss_mode, cfg.train.loss_scales)
 
             opt.zero_grad()
@@ -193,7 +196,7 @@ def main(args) -> None:
             )
 
             # Log loss values:
-            if global_step % cfg.train.log_every == 0:
+            if global_step % cfg.train.log_every == 0 or global_step == 1:
                 # Gather values from all processes
                 avg_mse_loss = (
                     accelerator.gather(
@@ -235,7 +238,7 @@ def main(args) -> None:
                     writer.add_scalar("train/perceptual_loss_step", avg_perceptual_loss, global_step)
 
             # Save checkpoint:
-            if global_step % cfg.train.ckpt_every == 0:
+            if global_step % cfg.train.ckpt_every == 0 or global_step == 1:
                 if accelerator.is_local_main_process:
                     checkpoint = vae.state_dict()
                     ckpt_path = f"{ckpt_dir}/{global_step:07d}.pt"
@@ -245,25 +248,27 @@ def main(args) -> None:
             if global_step % cfg.train.image_every == 0 or global_step == 1:
                 vae.encoder.eval()
                 vae.quant_conv.eval()
-                N = 12
-                log_gt, log_lq = gt[:N], lq[:N]
+                N = 4
+                log_gt, log_lq = (gt[:N]+1)/2, lq[:N]
                 with torch.no_grad():
-                    log_pred = vae.decode(vae.encode(log_lq).mode())
-                    log_pred_gt = vae.decode(vae.encode(log_gt).mode())
+                    log_pred = vae.decode(vae.encode(log_lq).mode()).clamp(0,1)
+                    # print(log_pred.min(), log_pred.max())
                 if accelerator.is_local_main_process:
                     for tag, image in [
-                        ("image/pred_gt", log_pred_gt),
                         ("image/pred", log_pred),
                         ("image/gt", log_gt),
-                        ("image/lq", log_lq),
+                        ("image/lq", (log_lq+1.)/2),
                     ]:
-                        writer.add_image(tag, make_grid(image, nrow=4), global_step)
+                        writer.add_image(tag, make_grid(image, nrow=3), global_step)
                 vae.encoder.train()
                 vae.quant_conv.train()
 
             # Evaluate model:
-            if global_step % cfg.train.val_every == 0:
-                vae.encoder.eval() 
+            if global_step % cfg.train.val_every == 0 or global_step == 1:
+                if args.unfreezeAll:
+                    vae.eval()
+                else:
+                    vae.encoder.eval() 
                 # NOTE: eval() only halts BN stat accumulation & disables dropout. grad computation can still happen! Use with torch.no_grad() around model.
                 vae.quant_conv.eval()
                 val_loss = []
@@ -290,16 +295,14 @@ def main(args) -> None:
                         rearrange(val_lq, "b h w c -> b c h w").contiguous().float()
                     )
                     with torch.no_grad():
-
                         lq_z = vae.encode(val_lq).mode()
                         gt_z = vae.encode(val_gt).mode()
-                        xhat_lq = vae.decode(lq_z)
-                        xhat_gt = vae.decode(gt_z)
-                        vloss, vloss_dict = compute_loss(val_gt, gt_z, lq_z, xhat_gt, xhat_lq, 
+                        xhat_lq = vae.decode(lq_z).clamp(0,1)
+                        vloss, vloss_dict = compute_loss((val_gt+1.)/2., gt_z, lq_z, xhat_lq, 
                                            lpips_model, cfg.train.loss_mode, cfg.train.loss_scales)
 
                         val_psnr.append(
-                            calculate_psnr_pt(xhat_lq, val_gt, crop_border=0)
+                            calculate_psnr_pt(xhat_lq, (val_gt+1.)/2., crop_border=0)
                             .mean()
                             .item()
                         )
@@ -336,8 +339,11 @@ def main(args) -> None:
                         ("val/psnr", avg_val_psnr),
                     ]:
                         writer.add_scalar(tag, val, global_step)
-                vae.encoder.train()
-                vae.quant_conv.train()
+                if args.unfreezeAll:
+                    vae.train()
+                else:
+                    vae.encoder.train()
+                    vae.quant_conv.train()
 
             accelerator.wait_for_everyone()
 
@@ -363,5 +369,6 @@ def main(args) -> None:
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
+    parser.add_argument("--unfreezeAll", action='store_true', default=False)
     args = parser.parse_args()
     main(args)
