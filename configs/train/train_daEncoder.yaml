@@ -45,7 +45,7 @@ batch_transform:
 
 train:
   # pretrained sd v2.1-zsnr path
-  sd_path: "/media/agarg54/Extreme SSD/weights/gqvr_sd21/3bit_vae_10xlr_8xBS/0600000.pt"
+  sd_path: "/nobackup1/aryan/weights/continue_VAE_UA/checkpoints/0003000.pt"
   # experiment directory path
   exp_dir: "/nobackup1/aryan/weights/continue_VAE_UA"
   learning_rate: 1e-5
@@ -53,7 +53,7 @@ train:
   num_workers: 32
   train_steps: 3_000_000
   log_every: 500
-  ckpt_every: 1000
+  ckpt_every: 3000
   image_every: 200
   val_every: 500
   # Loss params

@@ -1,16 +1,16 @@
-output_dir: /home/argar/apgi/gQVR/experiments/s2_mosaic_3bit
+output_dir: /nobackup1/aryan/weights/stage2_sd21_mosaic
 
 
 dataset:
   train:
-    batch_size: 2
-    dataloader_num_workers: 96
+    batch_size: 3
+    dataloader_num_workers: 24
     target: gqvr.dataset.spc_image_mosaic.SPCDataset_Mosaic
     params:
-      file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/combined_dataset.txt
+      file_list: /media/agarg54/Extreme SSD/dataset_files/combined_dataset.txt
       file_backend_cfg:
         target: gqvr.dataset.file_backend.HardDiskBackend
-      out_size: 512
+      out_size: 256
       crop_type: "center"
       use_hflip: False
       bits: 3
@@ -19,13 +19,13 @@ dataset:
 
   val:
     batch_size: 1
-    dataloader_num_workers: 96
+    dataloader_num_workers: 24
     target: gqvr.dataset.spc_image_mosaic.SPCDataset_Mosaic
     params:
-      file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/random_val.txt
+      file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/full_test_set.txt
       file_backend_cfg:
         target: gqvr.dataset.file_backend.HardDiskBackend
-      out_size: 512
+      out_size: 256
       crop_type: "center"
       use_hflip: False
       bits: 3
@@ -56,12 +56,12 @@ prompt_training: false
 lifting_training: false
 base_model_type: sd2
 base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
-qvae_path: /home/argar/apgi/gQVR/experiments/mosaic_3bit/checkpoints/0250000.pt
+qvae_path: /nobackup1/aryan/weights/continue_VAE_UA_mosaic/checkpoints/0105000.pt
 model_t: 200
 coeff_t: 200
 lora_rank: 256
 lora_modules: [to_k, to_q, to_v, to_out.0, conv, conv1, conv2, conv_shortcut, conv_out, proj_in, proj_out, ff.net.2, ff.net.0.proj]
-use_ema: true
+use_ema: false
 ema_decay: 0.999
 resume_ema: true
 
@@ -76,13 +76,13 @@ opt_kwargs:
 
 mixed_precision: bf16
 seed: 310
-max_train_steps: 50000
-gradient_accumulation_steps: 4
-gradient_checkpointing: true
+max_train_steps: 100_000
+gradient_accumulation_steps: 2
+gradient_checkpointing: false
 max_grad_norm: 1.0
 logging_dir: logs
 report_to: tensorboard
-checkpointing_steps: 1000
+checkpointing_steps: 5000
 checkpoints_total_limit: None
 resume_from_checkpoint: ~
 log_image_steps: 500

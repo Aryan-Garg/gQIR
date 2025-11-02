@@ -598,6 +598,8 @@ class BaseTrainer:
             # print(f"[+] gt_path: {gt_path}\n")
             gt = gt.permute(0, 3, 1, 2) # N C H W
             lq = lq.permute(0, 3, 1, 2)
+            # print("GT", gt.shape, gt.min(), gt.max())
+            # print("lq", lq.shape, lq.min(), lq.max())
 
             if self.config.prompt_training:
                 prompt = self.get_internVL_prompt(gt_path)
@@ -637,8 +639,8 @@ class BaseTrainer:
             x = self.forward_generator()
             # print(f"Gen output: {x.shape}")
             self.G_pred = x
-            loss_l2 = F.mse_loss(x, self.batch_inputs.gt, reduction="mean") * self.config.lambda_l2
-            loss_lpips = self.net_lpips(x, self.batch_inputs.gt).mean() * self.config.lambda_lpips
+            loss_l2 = F.mse_loss(x, (self.batch_inputs.gt+1.)/2., reduction="mean") * self.config.lambda_l2
+            loss_lpips = self.net_lpips(x, (self.batch_inputs.gt+1.)/2.).mean() * self.config.lambda_lpips
             loss_disc = self.D(x, for_G=True).mean() * self.config.lambda_gan
             loss_G = loss_l2 + loss_lpips + loss_disc
             self.accelerator.backward(loss_G)
@@ -653,7 +655,7 @@ class BaseTrainer:
         return loss_dict
 
     def optimize_discriminator(self):
-        gt = self.batch_inputs.gt
+        gt = (self.batch_inputs.gt+1.)/2.
         with torch.no_grad():
             x = self.forward_generator()
         self.G_pred = x
@@ -784,7 +786,7 @@ class BaseTrainer:
                         self.accelerator.log(log_dict, step=self.global_step)
                         if self.global_step % self.config.log_image_steps == 0 or self.global_step == 1:
                             self.log_videos()
-                        if self.global_step % self.config.checkpointing_steps == 0 or self.global_step == 10:
+                        if self.global_step % self.config.checkpointing_steps == 0:
                             self.save_checkpoint()
 
                     if self.global_step >= self.config.max_train_steps:
@@ -828,7 +830,7 @@ class BaseTrainer:
                             self.log_images()
                         if self.global_step % self.config.log_grad_steps == 0 or self.global_step == 1:
                             self.log_grads()
-                        if self.global_step % self.config.checkpointing_steps == 0 or self.global_step == 10:
+                        if self.global_step % self.config.checkpointing_steps == 0:
                             self.save_checkpoint()
 
                     if self.global_step >= self.config.max_train_steps:
@@ -885,7 +887,7 @@ class BaseTrainer:
         image_logs = dict(
             lq=(self.batch_inputs.lq[:N] + 1) / 2,
             gt=(self.batch_inputs.gt[:N] + 1) / 2,
-            G=(self.G_pred[:N] + 1) / 2,
+            G=self.G_pred[:N],
             prompt=(log_txt_as_img((256, 256), self.batch_inputs.prompt[:N]) + 1) / 2,
         )
         if self.config.use_ema:

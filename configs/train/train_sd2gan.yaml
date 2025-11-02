@@ -1,9 +1,9 @@
-output_dir: /nobackup1/aryan/weights
+output_dir: /nobackup1/aryan/weights/stage2_sd21_demosaic
 
 
 dataset:
   train:
-    batch_size: 1
+    batch_size: 3
     dataloader_num_workers: 24
     target: gqvr.dataset.spc_image_only.SPCDataset
     params:
@@ -18,7 +18,7 @@ dataset:
 
   val:
     batch_size: 1
-    dataloader_num_workers: 96
+    dataloader_num_workers: 24
     target: gqvr.dataset.spc_image_only.SPCDataset
     params:
       file_list: /mnt/disks/behemoth/datasets/dataset_txt_files/full_test_set.txt
@@ -54,7 +54,7 @@ prompt_training: false
 lifting_training: false
 base_model_type: sd2
 base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
-qvae_path: /media/agarg54/Extreme SSD/weights/gqvr_sd21/3bit_vae_10xlr_8xBS/0600000.pt
+qvae_path: /nobackup1/aryan/weights/continue_VAE_UA/checkpoints/0150000.pt
 model_t: 200
 coeff_t: 200
 lora_rank: 256
@@ -74,15 +74,15 @@ opt_kwargs:
 
 mixed_precision: bf16
 seed: 310
-max_train_steps: 100000
+max_train_steps: 100_000
 gradient_accumulation_steps: 1
 gradient_checkpointing: false
 max_grad_norm: 1.0
 logging_dir: logs
 report_to: tensorboard
-checkpointing_steps: 1000
+checkpointing_steps: 5000
 checkpoints_total_limit: None
 resume_from_checkpoint: ~
 log_image_steps: 500
-log_grad_steps: 250
+log_grad_steps: 500
 log_grad_modules: [conv_out]
