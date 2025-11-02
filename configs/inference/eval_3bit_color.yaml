@@ -1,7 +1,7 @@
 # qVAE config:    
 model:
   vae_cfg:
-    qvae_path: /media/agarg54/Extreme SSD/weights/gqvr_sd21/mosaic_3bit_Stage1_SD21/checkpoints/0250000.pt
+    qvae_path: /nobackup1/aryan/weights/continue_VAE_UA_mosaic/checkpoints/0108000.pt
     embed_dim: 4
     ddconfig:
       double_z: true
@@ -23,7 +23,7 @@ model:
 base_model_type: sd2
 base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
 weight_path: /media/agarg54/Extreme SSD/weights/gqvr_sd21/mosaic_3bit_Stage2_SD21/checkpoints/checkpoint-10000/state_dict.pth
-qvae_path: /media/agarg54/Extreme SSD/weights/gqvr_sd21/mosaic_3bit_Stage1_SD21/checkpoints/0250000.pt
+qvae_path: /nobackup1/aryan/weights/continue_VAE_UA_mosaic/checkpoints/0108000.pt
 model_t: 200
 coeff_t: 200
 lora_rank: 256
