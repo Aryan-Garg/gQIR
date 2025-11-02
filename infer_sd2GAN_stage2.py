@@ -242,14 +242,11 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False,
     result = (gt_img, img_lq, out[-1], out[0]) # (GT image, LQ image, prompt, reconstructed image)
 
     # Save results
-    output_dir = "./evaluation/"
+    output_dir = f"./evaluation_{'color' if color else 'mono'}/"
     os.makedirs(output_dir, exist_ok=True)
 
     gt_img_torch = to_tensor(result[0]).unsqueeze(0)
     out_img_torch = to_tensor(result[-1]).unsqueeze(0)
-
-    psnr, ssim, lpips = compute_full_reference_metrics(gt_img_torch, out_img_torch)
-    maniqa, clipiqa, musiq = compute_no_reference_metrics(out_img_torch)
 
     if color:
         gt_img_pil = Image.fromarray(gt_img.astype(np.uint8))
@@ -263,8 +260,8 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False,
     gt_img_pil.save(os.path.join(output_dir, f"gt_{'color' if color else 'mono'}_{str(idx_iter).zfill(4)}.png"))
     lq_img_pil.save(os.path.join(output_dir, f"lq_{'color' if color else 'mono'}_{str(idx_iter).zfill(4)}.png"))
     reconstructed_pil.save(os.path.join(output_dir, f"out_{'color' if color else 'mono'}_{str(idx_iter).zfill(4)}.png"))
-
-    return psnr, ssim, lpips, maniqa, clipiqa, musiq
+    return gt_img_torch, out_img_torch
+    # return psnr, ssim, lpips, maniqa, clipiqa, musiq
 
 
 
@@ -389,16 +386,25 @@ if __name__ == "__main__":
         with open("/media/agarg54/Extreme SSD/dataset_txt_files/full_test_set.txt", "r") as f:
             lines = f.readlines()
             curr_iter = 0
+            gts = []
+            outs = []
             for line in tqdm(lines):
                 gt_image_path = os.path.join(prefix_path, line.strip()[2:])
-                metrics = eval_single_image(gt_image_path = gt_image_path, color=config.color, idx_iter=curr_iter)
-                psnr_list.append(metrics[0])
-                ssim_list.append(metrics[1])
-                lpips_list.append(metrics[2])
-                maniqa_list.append(metrics[3])
-                clipiqa_list.append(metrics[4])
-                musiq_list.append(metrics[5])
+                gt, out = eval_single_image(gt_image_path = gt_image_path, color=config.color, idx_iter=curr_iter)
+                gts.append(gt)
+                outs.append(out)
                 curr_iter += 1
+
+            for i in range(len(gts)):
+                psnr, ssim, lpips = compute_full_reference_metrics(gts[i], outs[i])
+                maniqa, clipiqa, musiq = compute_no_reference_metrics(outs[i])
+                psnr_list.append(psnr)
+                ssim_list.append(ssim)
+                lpips_list.append(lpips)
+                maniqa_list.append(maniqa)
+                clipiqa_list.append(clipiqa)
+                musiq_list.append(musiq)
+                
 
         with open("./evaluation/mono_full_test_SD21-3bit-Stage2.txt", "w") as f:
             f.write("Overall scores on full_test_set:\n")
