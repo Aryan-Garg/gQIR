@@ -641,7 +641,10 @@ class BaseTrainer:
             self.G_pred = x
             loss_l2 = F.mse_loss(x, (self.batch_inputs.gt+1.)/2., reduction="mean") * self.config.lambda_l2
             loss_lpips = self.net_lpips(x, (self.batch_inputs.gt+1.)/2.).mean() * self.config.lambda_lpips
-            loss_disc = self.D(x, for_G=True).mean() * self.config.lambda_gan
+            if self.global_step >= self.config.keep_D_off_till:
+                loss_disc = self.D(x, for_G=True).mean() * self.config.lambda_gan
+            else:
+                loss_disc = self.D(x, for_G=True).mean() * 0.
             loss_G = loss_l2 + loss_lpips + loss_disc
             self.accelerator.backward(loss_G)
             if self.accelerator.sync_gradients:
@@ -797,7 +800,10 @@ class BaseTrainer:
                     self.reload_vram("G")
 
                 else:
-                    generator_step = ((self.batch_count // self.config.gradient_accumulation_steps) % 2) == 0
+                    if self.global_step >= self.config.keep_D_off_till:
+                        generator_step = ((self.batch_count // self.config.gradient_accumulation_steps) % 2) == 0
+                    else:
+                        generator_step = True
                     if generator_step:
                         loss_dict = self.optimize_generator()
                     else:
@@ -818,7 +824,8 @@ class BaseTrainer:
                         _, _, peak = print_vram_state(None)
                         self.pbar.set_description(f"{state}, VRAM peak: {peak:.2f} GB")
 
-                    if self.accelerator.sync_gradients and not generator_step:
+                    if (self.accelerator.sync_gradients and (self.global_step >= self.config.keep_D_off_till and not generator_step)) or \
+                        (self.accelerator.sync_gradients and self.global_step < self.config.keep_D_off_till):
                         self.global_step += 1
                         self.pbar.update(1)
                         log_dict = {}

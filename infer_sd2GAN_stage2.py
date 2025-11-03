@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 
 to_tensor = transforms.ToTensor()
 
-def process(image, prompt, upscale, save_Gprocessed_latents: bool = False, fname:str = "", seed=310):
+def process(image, prompt, upscale, save_Gprocessed_latents: bool = False, fname:str = "", seed=310, onlyVAE_output=False):
     if seed == -1:
         seed = random.randint(0, 2**32 - 1)
     set_seed(seed)
@@ -47,7 +47,7 @@ def process(image, prompt, upscale, save_Gprocessed_latents: bool = False, fname
             prompt=prompt,
             upscale=upscale,
             return_type="pil",
-            only_vae_output=False,
+            only_vae_output=onlyVAE_output,
             save_Gprocessed_latents=save_Gprocessed_latents,
             fname=fname 
         )[0] 
@@ -212,7 +212,7 @@ def compute_no_reference_metrics(out_img):
     return maniqa_score, clipiqa_score, musiq_score #, deqa_score
 
 
-def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False, idx_iter=None):
+def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False, idx_iter=None, onlyVAE_output=False):
     if gt_image_path:
         gt_img = Image.open(gt_image_path)
         gt_img = gt_img.convert("RGB")
@@ -237,12 +237,11 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False,
         img_lq = Image.open(lq_image_path)
 
 
-    out = process(img_lq, "", upscale=1.0)
-    # print(out)
+    out = process(img_lq, "", upscale=1.0, onlyVAE_output=onlyVAE_output)
     result = (gt_img, img_lq, out[-1], out[0]) # (GT image, LQ image, prompt, reconstructed image)
 
     # Save results
-    output_dir = f"./evaluation_{'color' if color else 'mono'}/"
+    output_dir = f"/nobackup1/aryan/results/evaluation_s1_{'color' if color else 'mono'}/"
     os.makedirs(output_dir, exist_ok=True)
 
     gt_img_torch = to_tensor(result[0]).unsqueeze(0)
@@ -277,17 +276,17 @@ def eval_single_real_input(lq_image_path, color=True):
     out = process(img_lq_resized, "", upscale=1.0)
     result = (img_lq, out[-1], out[0]) 
     
-    output_dir = "./evaluation_real/"
+    output_dir = "./evaluation_real_fixed/"
     os.makedirs(output_dir, exist_ok=True)
 
     lq_img_pil = Image.fromarray((img_lq_resized*255.).astype(np.uint8))
-    print(np.array(out[0]).shape, np.array(out[0]).min(), np.array(out[0]).max())
+    # print(np.array(out[0]).shape, np.array(out[0]).min(), np.array(out[0]).max())
     reconstructed_pil = result[-1]
-    
-
     reconstructed_pil = Image.fromarray(np.array(reconstructed_pil))
+
     lq_img_pil.save(os.path.join(output_dir, f"{lq_image_path.split('/')[-1][:-4]}_in.png"))
     reconstructed_pil.save(os.path.join(output_dir, f"{lq_image_path.split('/')[-1][:-4]}_out.png"))
+    
     return
 
 
@@ -338,6 +337,7 @@ if __name__ == "__main__":
     parser.add_argument("--ds_txt", type=str)
     parser.add_argument("--eval_metrics", action='store_true', help="Run SPAD simulation on GT dataset to get metrics")
     parser.add_argument("--real_captures", action='store_true', help="Run model on 3-bit averaged bayer input")
+    parser.add_argument("--only_vae", action='store_true', help="Return VAE reconstructions")
     args = parser.parse_args()
 
     # Set device
@@ -390,12 +390,12 @@ if __name__ == "__main__":
             outs = []
             for line in tqdm(lines):
                 gt_image_path = os.path.join(prefix_path, line.strip()[2:])
-                gt, out = eval_single_image(gt_image_path = gt_image_path, color=config.color, idx_iter=curr_iter)
+                gt, out = eval_single_image(gt_image_path = gt_image_path, color=config.color, idx_iter=curr_iter, onlyVAE_output=args.only_vae)
                 gts.append(gt)
                 outs.append(out)
                 curr_iter += 1
 
-            for i in range(len(gts)):
+            for i in tqdm(range(len(gts))):
                 psnr, ssim, lpips = compute_full_reference_metrics(gts[i], outs[i])
                 maniqa, clipiqa, musiq = compute_no_reference_metrics(outs[i])
                 psnr_list.append(psnr)
@@ -406,7 +406,7 @@ if __name__ == "__main__":
                 musiq_list.append(musiq)
                 
 
-        with open("./evaluation/mono_full_test_SD21-3bit-Stage2.txt", "w") as f:
+        with open(f"/nobackup1/aryan/results/evaluation{'color' if config.color else 'mono'}_Stage1.txt", "w") as f:
             f.write("Overall scores on full_test_set:\n")
             f.write("---------- FR scores ----------\n")
             f.write(f"Average PSNR: {np.mean(psnr_list):.2f} dB\n")

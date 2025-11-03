@@ -25,7 +25,7 @@ from gqvr.utils.common import instantiate_from_config, calculate_psnr_pt, to
 from gqvr.model.vae import AutoencoderKL
 
 
-def compute_loss(gt, z_gt, z_pred, xhat_lq, lpips_model, loss_mode, scales):
+def compute_loss(gt, z_gt, z_pred, xhat_lq, xhat_gt, lpips_model, loss_mode, scales):
     #  "mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual"
     mse_loss = 0.
     ls_loss = 0.
@@ -36,13 +36,13 @@ def compute_loss(gt, z_gt, z_pred, xhat_lq, lpips_model, loss_mode, scales):
         ls_loss = scales.lsa * F.mse_loss(z_pred, z_gt, reduction="mean")
         loss_dict["lsa"] = ls_loss.item()
         if "mse" in loss_mode:
-            mse_loss = scales.mse * F.mse_loss(xhat_lq, gt, reduction="mean")
+            mse_loss = scales.mse * F.mse_loss(xhat_lq, xhat_gt, reduction="mean")
             loss_dict["mse"] = mse_loss.item()
         if "gt" in loss_mode:
-            gt_loss = scales.gt * F.l1_loss(xhat_lq, gt, reduction="mean")
+            gt_loss = scales.gt * F.l1_loss(xhat_lq, xhat_gt, reduction="mean")
             loss_dict["gt_loss"] = gt_loss.item()
         if "perceptual" in loss_mode:
-            perceptual_loss = scales.perceptual * lpips_model(xhat_lq, gt)
+            perceptual_loss = scales.perceptual * lpips_model(xhat_lq, xhat_gt)
             loss_dict["perceptual"] = perceptual_loss.item()
     else:
         raise NotImplementedError("[!] Always use Latent Space Alignment (LSA) loss")
@@ -172,11 +172,12 @@ def main(args) -> None:
             # Train step:
             with torch.no_grad():
                 gt_latent = vae.encode(gt).mode()
+                xhat_gt = vae.decode(gt_latent)
 
             pred_latent = vae.encode(lq).mode()
             xhat_lq = vae.decode(pred_latent).clamp(0,1)
 
-            loss, loss_dict = compute_loss((gt+1.)/2., gt_latent, pred_latent, xhat_lq, 
+            loss, loss_dict = compute_loss((gt+1.)/2., gt_latent, pred_latent, xhat_lq, xhat_gt,
                                            lpips_model, cfg.train.loss_mode, cfg.train.loss_scales)
 
             opt.zero_grad()
@@ -252,9 +253,11 @@ def main(args) -> None:
                 log_gt, log_lq = (gt[:N]+1)/2, lq[:N]
                 with torch.no_grad():
                     log_pred = vae.decode(vae.encode(log_lq).mode()).clamp(0,1)
+                    log_pred_gt = vae.decode(vae.encode(log_gt).mode()).clamp(0,1)
                     # print(log_pred.min(), log_pred.max())
                 if accelerator.is_local_main_process:
                     for tag, image in [
+                        ("image/pred_gt", log_pred_gt),
                         ("image/pred", log_pred),
                         ("image/gt", log_gt),
                         ("image/lq", (log_lq+1.)/2),
@@ -297,8 +300,9 @@ def main(args) -> None:
                     with torch.no_grad():
                         lq_z = vae.encode(val_lq).mode()
                         gt_z = vae.encode(val_gt).mode()
+                        xhat_gt = vae.decode(gt_z).clamp(0,1)
                         xhat_lq = vae.decode(lq_z).clamp(0,1)
-                        vloss, vloss_dict = compute_loss((val_gt+1.)/2., gt_z, lq_z, xhat_lq, 
+                        vloss, vloss_dict = compute_loss((val_gt+1.)/2., gt_z, lq_z, xhat_lq, xhat_gt,
                                            lpips_model, cfg.train.loss_mode, cfg.train.loss_scales)
 
                         val_psnr.append(

@@ -3,7 +3,7 @@ output_dir: /nobackup1/aryan/weights/stage2_sd21_mosaic
 
 dataset:
   train:
-    batch_size: 3
+    batch_size: 2
     dataloader_num_workers: 24
     target: gqvr.dataset.spc_image_mosaic.SPCDataset_Mosaic
     params:
@@ -56,6 +56,8 @@ prompt_training: false
 lifting_training: false
 base_model_type: sd2
 base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
+resume_from_checkpoint: /nobackup1/aryan/weights/stage2_sd21_mosaic/checkpoints/checkpoint-20000
+# resume_from_checkpoint: ~
 qvae_path: /nobackup1/aryan/weights/continue_VAE_UA_mosaic/checkpoints/0105000.pt
 model_t: 200
 coeff_t: 200
@@ -67,7 +69,7 @@ resume_ema: true
 
 lambda_gan: 0.5
 lambda_lpips: 5
-lambda_l2: 1
+lambda_l2: 500
 lr_G: 1e-5
 lr_D: 1e-5
 optimizer_type: adam
@@ -77,14 +79,14 @@ opt_kwargs:
 mixed_precision: bf16
 seed: 310
 max_train_steps: 100_000
-gradient_accumulation_steps: 2
+keep_D_off_till: 75_000
+gradient_accumulation_steps: 1
 gradient_checkpointing: false
 max_grad_norm: 1.0
 logging_dir: logs
 report_to: tensorboard
-checkpointing_steps: 5000
+checkpointing_steps: 20000
 checkpoints_total_limit: None
-resume_from_checkpoint: ~
 log_image_steps: 500
 log_grad_steps: 250
 log_grad_modules: [conv_out]

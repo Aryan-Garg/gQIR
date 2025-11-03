@@ -169,7 +169,7 @@ class BaseEnhancer:
     @staticmethod
     def tensor2image(img_tensor):
         return (
-            (((img_tensor + 1) / 2) * 255.0).clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1)
+            (img_tensor * 255.0).clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1)
             .contiguous()
             .cpu()
             .numpy()

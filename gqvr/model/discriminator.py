@@ -4,6 +4,7 @@ from vision_aided_loss.cv_discriminator import BlurPool, spectral_norm
 from vision_aided_loss.cv_losses import multilevel_loss
 
 from .backbone_discriminator import ImageOpenCLIPConvNext
+import torch.nn.functional as F
 
 
 class MultiLevelDConv(nn.Module):
@@ -11,21 +12,25 @@ class MultiLevelDConv(nn.Module):
     def __init__(
         self,
         level=3,
-        in_ch1=[768, 1536],
+        in_ch1=[384, 768, 1536],
         in_ch2=512,
         out_ch=256,
         num_classes=0,
-        activation=nn.LeakyReLU(0.2, inplace=True),
+        activation=nn.LeakyReLU(0.2, inplace=False),
         down=1,
     ):
         super().__init__()
         self.decoder = nn.ModuleList()
         self.level = level
         for i in range(level - 1):
+            c_in = in_ch1[i]
+            c_proj = max(96, c_in // 2) 
             self.decoder.append(
                 nn.Sequential(
-                    BlurPool(in_ch1[i], pad_type="zero", stride=1, pad_off=1) if down > 1 else nn.Identity(),
-                    spectral_norm(nn.Conv2d(in_ch1[i], out_ch, kernel_size=3, stride=2 if down > 1 else 1, padding=1 if down == 1 else 0)),
+                    spectral_norm(nn.Conv2d(c_in, c_proj, kernel_size=1, bias=False)),  # 1×1 proj
+                    activation,
+                    BlurPool(c_proj, pad_type="zero", stride=1, pad_off=1) if down > 1 else nn.Identity(),
+                    spectral_norm(nn.Conv2d(c_proj, out_ch, kernel_size=3, stride=2 if down > 1 else 1, padding=1 if down == 1 else 0)),
                     activation,
                     BlurPool(out_ch, pad_type="zero", stride=1),
                     spectral_norm(nn.Conv2d(out_ch, 1, kernel_size=1, stride=2)),
@@ -58,10 +63,30 @@ class ImageConvNextDiscriminator(nn.Module):
         super().__init__()
         self.model = ImageOpenCLIPConvNext(precision=precision)
         self.model.eval().requires_grad_(False)
-        self.decoder = MultiLevelDConv(level=3, in_ch1=[768, 1536], in_ch2=1024, out_ch=512, down=2)
+        # self.decoder = MultiLevelDConv(level=4, in_ch1=[384, 768, 1536], in_ch2=1024, out_ch=512, down=2)
         self.loss_fn = multilevel_loss(alpha=0.8)
         self.register_buffer("image_mean", torch.tensor([0.48145466, 0.4578275, 0.40821073], dtype=torch.float32))
         self.register_buffer("image_std", torch.tensor([0.26862954, 0.26130258, 0.27577711], dtype=torch.float32))
+        self.autocast_dtype = torch.bfloat16 # if precision in ["bf16","bfloat16"] else torch.float16 if precision=="fp16" else None
+
+        # Probe shapes at 256
+        with torch.no_grad(), torch.autocast("cuda", dtype=self.autocast_dtype):
+            dummy = torch.zeros(1,3,256,256, device=self.image_mean.device)
+            dummy = (dummy - self.image_mean[:,None,None]) / self.image_std[:,None,None]
+            feats = self.model.encode_image(dummy, return_pooled_feats=True)
+        spatial = [f for f in feats if f.dim()==4]     # expect 2 taps
+        pooled  = [f for f in feats if f.dim()==2]
+        assert len(spatial)==2 and len(pooled)==1, "Unexpected taps at 256."
+
+        # Synthesized extra level (keeps params tiny)
+        self.synth = spectral_norm(nn.Conv2d(spatial[-1].shape[1],
+                                             spatial[-1].shape[1],
+                                             kernel_size=3, stride=2, padding=1))
+
+        in_ch1 = [spatial[0].shape[1], spatial[1].shape[1], spatial[1].shape[1]]  # add synth level
+        in_ch2 = pooled[0].shape[1]
+        level  = 4
+        self.decoder = MultiLevelDConv(level=level, in_ch1=in_ch1, in_ch2=in_ch2, out_ch=256, down=2)
 
     def train(self, mode=True):
         self.decoder.train(mode)
@@ -76,20 +101,25 @@ class ImageConvNextDiscriminator(nn.Module):
         return self
 
     def forward(self, x, for_real=True, for_G=False, verbose=False, return_logits=False):
-        x = x * 0.5 + 0.5
-        x = (x - self.image_mean[:, None, None]) / self.image_std[:, None, None]
+        with torch.autocast(device_type="cuda", dtype=self.autocast_dtype) if self.autocast_dtype else contextlib.nullcontext():
+            x = x * 0.5 + 0.5
+            x = (x - self.image_mean[:, None, None]) / self.image_std[:, None, None]
 
-        features = self.model.encode_image(x, return_pooled_feats=True)
-        if verbose:
-            for i, f in enumerate(features):
-                print(f"{i}-th feature: {f.shape}")
+            feats = self.model.encode_image(x, return_pooled_feats=True)
+            # feats = [f.detach() for f in feats]
+            f0, f1, p = feats[0], feats[1], feats[2]
+            f2 = self.synth(f1)   # synthesized 3rd spatial level
+            feats = [f0, f1, f2, p]
+            if verbose:
+                for i, f in enumerate(feats):
+                    print(f"{i}-th feature: {f.shape}")
 
-        features = self.decoder(features)
-        if verbose:
-            for i, f in enumerate(features):
-                print(f"{i}-th feature after decoder: {f.shape}")
+            feats = self.decoder(feats)
+            if verbose:
+                for i, f in enumerate(feats):
+                    print(f"{i}-th feature after decoder: {f.shape}")
 
-        if not return_logits:
-            return self.loss_fn(features, for_real=for_real, for_G=for_G)
-        else:
-            return self.loss_fn(features, for_real=for_real, for_G=for_G), features
+            if not return_logits:
+                return self.loss_fn(feats, for_real=for_real, for_G=for_G)
+            else:
+                return self.loss_fn(feats, for_real=for_real, for_G=for_G), feats

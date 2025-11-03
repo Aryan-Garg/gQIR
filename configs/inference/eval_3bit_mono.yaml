@@ -22,7 +22,7 @@ model:
 # prompt_training: true
 base_model_type: sd2
 base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
-weight_path: /media/agarg54/Extreme SSD/weights/gqvr_sd21/checkpoints_stage2_nullprompt/checkpoint-30000/state_dict.pth
+weight_path: /nobackup1/aryan/weights/stage2_sd21_demosaic/checkpoints/checkpoint-80000/state_dict.pth
 qvae_path: /nobackup1/aryan/weights/continue_VAE_UA/checkpoints/0150000.pt
 model_t: 200
 coeff_t: 200
