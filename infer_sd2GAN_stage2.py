@@ -186,6 +186,9 @@ def compute_full_reference_metrics(gt_img, out_img):
 
 import pyiqa
 # from DeQAScore.src import Scorer
+maniqaMODEL = pyiqa.create_metric('maniqa', device=torch.device("cuda"))
+clipiqaMODEL = pyiqa.create_metric('clipiqa', device=torch.device("cuda"))
+musiqMODEL = pyiqa.create_metric('musiq', device=torch.device("cuda"))
 def compute_no_reference_metrics(out_img):
     # center crop to 224x224 for no-reference metrics
     _, _, h, w = out_img.shape
@@ -194,14 +197,10 @@ def compute_no_reference_metrics(out_img):
     out_img = out_img[:, :, top:top+224, left:left+224]
 
     # ManIQA DeQA MUSIQ ClipIQA
-    maniqa = pyiqa.create_metric('maniqa', device=torch.device("cuda:1"))
-    clipiqa = pyiqa.create_metric('clipiqa', device=torch.device("cuda:1"))
-    musiq = pyiqa.create_metric('musiq', device=torch.device("cuda:1"))
-    # deqa = Scorer(model_type='deqa', device=torch.device("cuda:1"))
 
-    maniqa_score = maniqa(out_img).item()
-    clipiqa_score = clipiqa(out_img).item()
-    musiq_score = musiq(out_img).item()
+    maniqa_score = maniqaMODEL(out_img).item()
+    clipiqa_score = clipiqaMODEL(out_img).item()
+    musiq_score = musiqMODEL(out_img).item()
     # deqa_score = deqa.score([Image.fromarray((out_img.squeeze(0).permute(1,2,0).cpu().numpy()*255).astype(np.uint8))])[0]
 
     # print("No-reference scores:")
@@ -212,11 +211,12 @@ def compute_no_reference_metrics(out_img):
     return maniqa_score, clipiqa_score, musiq_score #, deqa_score
 
 
-def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False, idx_iter=None, onlyVAE_output=False):
+def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False, idx_iter=None, onlyVAE_output=False, givenprompt=""):
     if gt_image_path:
         gt_img = Image.open(gt_image_path)
         gt_img = gt_img.convert("RGB")
         gt_img = center_crop_arr(gt_img, 512)  # Center Crop to 512x512
+        # gt_img = np.array(gt_img.resize((512 ,288)))
 
         if lq_image_path == None: # LQ image simulation
             bits = lq_bits
@@ -237,11 +237,11 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False,
         img_lq = Image.open(lq_image_path)
 
 
-    out = process(img_lq, "", upscale=1.0, onlyVAE_output=onlyVAE_output)
+    out = process(img_lq, givenprompt, upscale=1.0, onlyVAE_output=onlyVAE_output)
     result = (gt_img, img_lq, out[-1], out[0]) # (GT image, LQ image, prompt, reconstructed image)
 
     # Save results
-    output_dir = f"/nobackup1/aryan/results/evaluation_s1_{'color' if color else 'mono'}/"
+    output_dir = f"/nobackup1/aryan/results/prompt_experiments/untitled"
     os.makedirs(output_dir, exist_ok=True)
 
     gt_img_torch = to_tensor(result[0]).unsqueeze(0)
@@ -252,9 +252,9 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False,
         lq_img_pil = Image.fromarray((img_lq*255).astype(np.uint8))
         reconstructed_pil = result[-1]
     else:
-        gt_img_pil = Image.fromarray(gt_img.astype(np.uint8))#.convert('L')
-        lq_img_pil = Image.fromarray((img_lq*255).astype(np.uint8))#.convert('L')
-        reconstructed_pil = result[-1]#.convert('L')
+        gt_img_pil = Image.fromarray(gt_img.astype(np.uint8)).convert('L')
+        lq_img_pil = Image.fromarray((img_lq*255).astype(np.uint8)).convert('L')
+        reconstructed_pil = result[-1].convert('L')
 
     gt_img_pil.save(os.path.join(output_dir, f"gt_{'color' if color else 'mono'}_{str(idx_iter).zfill(4)}.png"))
     lq_img_pil.save(os.path.join(output_dir, f"lq_{'color' if color else 'mono'}_{str(idx_iter).zfill(4)}.png"))
@@ -273,10 +273,10 @@ def eval_single_real_input(lq_image_path, color=True):
     # Normalize to 0..1
     img_lq_resized = (img_lq_resized - img_lq_resized.min()) / (img_lq_resized.max() - img_lq_resized.min())
    
-    out = process(img_lq_resized, "", upscale=1.0)
+    out = process(img_lq_resized, "Cute cats", upscale=1.0)
     result = (img_lq, out[-1], out[0]) 
     
-    output_dir = "./evaluation_real_fixed/"
+    output_dir = "./evaluation_real_prompt/"
     os.makedirs(output_dir, exist_ok=True)
 
     lq_img_pil = Image.fromarray((img_lq_resized*255.).astype(np.uint8))
@@ -333,11 +333,13 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--internvl_caption", action="store_true")
     parser.add_argument("--max_size", type=str, default="512,512", help="Comma-seperated image size")
-    parser.add_argument("--device", type=str, default="cuda:1", help="Device to run the model on")
+    parser.add_argument("--device", type=str, default="cuda", help="Device to run the model on")
     parser.add_argument("--ds_txt", type=str)
     parser.add_argument("--eval_metrics", action='store_true', help="Run SPAD simulation on GT dataset to get metrics")
     parser.add_argument("--real_captures", action='store_true', help="Run model on 3-bit averaged bayer input")
     parser.add_argument("--only_vae", action='store_true', help="Return VAE reconstructions")
+    parser.add_argument("--eval_single_image", action='store_true', help="Return single img recon")
+    parser.add_argument("--single_img_path", type=str, default="", help="If running single image inference, give path")
     args = parser.parse_args()
 
     # Set device
@@ -372,6 +374,7 @@ if __name__ == "__main__":
             device=args.device,
         )
         model.init_models()
+        # print(f"[~] All VAE parameters: {sum(p.numel() for p in model.vae.parameters()) / 1e6:.2f}M") 
     else:
         raise ValueError(config.base_model_type)
 
@@ -423,6 +426,19 @@ if __name__ == "__main__":
             for line in tqdm(lines):
                 lq_path = line.strip()
                 eval_single_real_input(lq_image_path = lq_path)
+
+    if args.eval_single_image:
+        assert os.path.exists(args.single_img_path), f"Invalid path: {args.single_img_path}"
+        eval_single_image(args.single_img_path, 
+                          color=True, 
+                          idx_iter=0, 
+                          givenprompt="Crocodile with sharp teeth on the lake shore, high resolution, detailed, professional photography")
+        # NOTE: This snipped below is useful for evaluating XD-burst:
+        # frame_id = int(args.single_img_path.split("/")[-1].split(".")[0].split("_")[-1])
+        # for i in tqdm(range(1,12)):
+        #     frame_path = args.single_img_path[:-14] + f"frame_{str(frame_id).zfill(4)}.png"
+        #     eval_single_image(frame_path, color=True, idx_iter=frame_id)
+        #     frame_id += 1
 
     # save_all_video_Gprocessed_latents_to_disk(args.ds_txt)
         
