@@ -85,7 +85,7 @@ max_train_steps: 500000
 checkpointing_steps: 2500
 checkpoints_total_limit: None
 resume_from_checkpoint: ~
-log_every: 500
+log_every: 250
 resume_training: False
 
 train_unet: false
