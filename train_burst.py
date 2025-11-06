@@ -57,7 +57,7 @@ def differentiable_warp(x, flow):
     new_grid[..., 0] = 2.0 * new_grid[..., 0] / (W - 1) - 1.0
     new_grid[..., 1] = 2.0 * new_grid[..., 1] / (H - 1) - 1.0
 
-    warped = F.grid_sample(x, new_grid, align_corners=True)
+    warped = F.grid_sample(x, new_grid, align_corners=True, padding_mode="border")
     return warped
 
 
@@ -164,24 +164,23 @@ def compute_flow_loss(pred_frames, gt_frames, raft_model):
 
 
 def compute_burst_loss(gt, xhat_lq, lpips_model, scales, loss_mode="gt_perceptual_lsa", z_gt=None, z_fused=None):
-    xhat_lq_scaled = (xhat_lq * 2.0) - 1.0  # scale to [-1, 1]
-
     lsa_loss = 0.
     gt_loss = 0.
     perceptual_loss = 0.
-    loss_dict = {"lsa_loss": lsa_loss, "perceptual": perceptual_loss, "l1_loss": gt_loss}
+    loss_dict = {"lsa_loss": lsa_loss, "perceptual": perceptual_loss, "l2_loss": gt_loss}
 
     if "lsa" in loss_mode:
-        lsa_loss = scales.lsa * F.l1_loss(z_fused, z_gt, reduction="mean")
+        lsa_loss = scales.lsa * F.mse_loss(z_fused, z_gt, reduction="mean")
         loss_dict["lsa_loss"] = lsa_loss.item()
 
-    if "gt" in loss_mode:
-        gt_loss = scales.l1 * F.l1_loss(xhat_lq_scaled.float(), gt.float(), reduction="mean")
-        loss_dict["l1_loss"] = gt_loss.item()
+    if "mse" in loss_mode:
+        gt_loss = scales.mse * F.mse_loss(xhat_lq.float(), gt.float(), reduction="mean")
+        loss_dict["l2_loss"] = gt_loss.item()
 
     if "perceptual" in loss_mode:
-        perceptual_loss = scales.perceptual * lpips_model((xhat_lq_scaled.clamp(-1,1)).float(),  
-                                                          (gt.clamp(-1,1)).float())
+        with torch.cuda.amp.autocast(False):
+            perceptual_loss = scales.perceptual * lpips_model( ((xhat_lq*2.) - 1.).float(),  
+                                                          ((gt*2.)-1.).float())
         loss_dict["perceptual"] = perceptual_loss.item()
 
     total_loss = lsa_loss + gt_loss + perceptual_loss
@@ -250,57 +249,63 @@ def main(args) -> None:
     fusion_vit = LightweightHybrid3DFusion()
     fusion_vit.train().requires_grad_(True)
 
-    if cfg.use_unet:
-        print("[~] Using burst UNet refinement module")
-        tokenizer = CLIPTokenizer.from_pretrained(cfg.base_model_path, subfolder="tokenizer")
-        text_encoder = CLIPTextModel.from_pretrained(cfg.base_model_path, subfolder="text_encoder", dtype=weight_dtype).to(device)
-        text_encoder.eval().requires_grad_(False)
     
-        def encode_prompt(prompt):
-            txt_ids = tokenizer(
-                prompt,
-                max_length=tokenizer.model_max_length,
-                padding="max_length",
-                truncation=True,
-                return_tensors="pt",
-            ).input_ids
-            text_embed = text_encoder(txt_ids.to(accelerator.device))[0]
-            return {"text_embed": text_embed}
-         
-        
-        scheduler = DDPMScheduler.from_pretrained(cfg.base_model_path, subfolder="scheduler")
-        ls_burst_unet = UNet2DConditionModel.from_pretrained(cfg.base_model_path, 
-                                                             subfolder="unet", 
-                                                             torch_dtype=torch.bfloat16).to(device)
-        ls_burst_unet.eval().requires_grad_(False)
+    print("[~] Using burst UNet refinement module")
+    tokenizer = CLIPTokenizer.from_pretrained(cfg.base_model_path, subfolder="tokenizer")
+    text_encoder = CLIPTextModel.from_pretrained(cfg.base_model_path, subfolder="text_encoder", dtype=weight_dtype).to(device)
+    text_encoder.eval().requires_grad_(False)
+
+    def encode_prompt(prompt, bs):
+        txt_ids = tokenizer(
+            [prompt] * bs,
+            max_length=tokenizer.model_max_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
+        ).input_ids
+        text_embed = text_encoder(txt_ids.to(accelerator.device))[0]
+        return {"text_embed": text_embed}
+     
     
-        target_modules = cfg.lora_modules
-        G_lora_cfg = LoraConfig(
-            r=cfg.lora_rank,
-            lora_alpha=cfg.lora_rank,
-            init_lora_weights="gaussian",
-            target_modules=target_modules,
-        )
-        ls_burst_unet.add_adapter(G_lora_cfg)
-        lora_params = list(filter(lambda p: p.requires_grad, ls_burst_unet.parameters()))
-        assert lora_params, "Failed to find lora parameters"
-        for p in lora_params:
-            p.data = p.to(torch.float32)
+    scheduler = DDPMScheduler.from_pretrained(cfg.base_model_path, subfolder="scheduler")
+    ls_burst_unet = UNet2DConditionModel.from_pretrained(cfg.base_model_path, 
+                                                         subfolder="unet", 
+                                                         torch_dtype=torch.bfloat16).to(device)
+    # Handle lora configuration
+    target_modules = cfg.lora_modules
+    print(f"Add lora parameters to {target_modules}")
+    G_lora_cfg = LoraConfig(
+        r=cfg.lora_rank,
+        lora_alpha=cfg.lora_rank,
+        init_lora_weights="gaussian",
+        target_modules=target_modules,
+    )
+    ls_burst_unet.add_adapter(G_lora_cfg)
+
+    print(f"Load UNet model weights from {cfg.unet_weight_path}")
+    state_dict = torch.load(cfg.unet_weight_path, map_location="cpu", weights_only=False)
+    ls_burst_unet.load_state_dict(state_dict, strict=False)
+    input_keys = set(state_dict.keys())
+    required_keys = set([k for k in ls_burst_unet.state_dict().keys() if "lora" in k])
+    missing = required_keys - input_keys
+    unexpected = input_keys - required_keys
+    assert required_keys == input_keys, f"Missing: {missing}, Unexpected: {unexpected}"
+    ls_burst_unet.eval().requires_grad_(False)
 
     # print(f"\n[~] All trainable RAFT model parameters: {(sum(p.numel() for p in raft_model.parameters() if p.requires_grad)) / 1e6:.2f}M")
     print(f"\n[~] All RAFT model parameters: {(sum(p.numel() for p in raft_model.parameters())) / 1e6:.2f}M")
     # print(f"[~] All trainable VAE model parameters: {sum(p.numel() for p in vae.parameters() if p.requires_grad) / 1e6:.2f}M")
     print(f"[~] All VAE model parameters: {sum(p.numel() for p in vae.parameters()) / 1e6:.2f}M")
     print(f"[~] All trainable fusionVIT model parameters: {sum(p.numel() for p in fusion_vit.parameters() if p.requires_grad) / 1e6:.2f}M")
-    if cfg.use_unet:
-        print(f"[~] All trainable burst UNet parameters: {sum(p.numel() for p in ls_burst_unet.parameters() if p.requires_grad) / 1e6:.2f}M")
-        # print(f"[~] All trainable 3D merge module parameters: {sum(p.numel() for p in ls_burst_unet.parameters() if p.requires_grad) / 1e6:.2f}M")
-        print(f"[~] All burst UNet parameters: {sum(p.numel() for p in ls_burst_unet.parameters()) / 1e6:.2f}M")
-        print(f"[~] All text encoder parameters: {(sum(p.numel() for p in text_encoder.parameters())) / 1e6:.2f}M\n")
+    
+    print(f"[~] All trainable burst UNet parameters: {sum(p.numel() for p in ls_burst_unet.parameters() if p.requires_grad) / 1e6:.2f}M")
+    # print(f"[~] All trainable 3D merge module parameters: {sum(p.numel() for p in ls_burst_unet.parameters() if p.requires_grad) / 1e6:.2f}M")
+    print(f"[~] All burst UNet parameters: {sum(p.numel() for p in ls_burst_unet.parameters()) / 1e6:.2f}M")
+    print(f"[~] All text encoder parameters: {(sum(p.numel() for p in text_encoder.parameters())) / 1e6:.2f}M\n")
     
     # Setup optimizer:
     all_params = list(fusion_vit.parameters())
-    if cfg.use_unet:
+    if cfg.train_unet:
         all_params += list(ls_burst_unet.parameters())
     opt = torch.optim.AdamW(all_params, 
         lr=cfg.lr_burst_model, 
@@ -313,25 +318,26 @@ def main(args) -> None:
         batch_size=cfg.dataset.train.batch_size,
         num_workers=cfg.dataset.train.num_workers,
         drop_last=True,
+        shuffle=True,
     )
 
     batch_transform = instantiate_from_config(cfg.dataset.batch_transform)
 
-    if cfg.use_unet:
+    if cfg.train_unet:
         ls_burst_unet, fusion_vit, opt, loader = accelerator.prepare(
             ls_burst_unet, fusion_vit, opt, loader
         )
-        ls_burst_unet = accelerator.unwrap_model(ls_burst_unet) 
+        # ls_burst_unet = accelerator.unwrap_model(ls_burst_unet) 
     else:
         fusion_vit, opt, loader = accelerator.prepare(
             fusion_vit, opt, loader
         )
-    fusion_vit = accelerator.unwrap_model(fusion_vit) 
+    # fusion_vit = accelerator.unwrap_model(fusion_vit) 
 
     # Variables for monitoring/logging purposes:
     global_step = 0
     max_steps = cfg.max_train_steps
-    step_l1_loss = []
+    step_l2_loss = []
     step_perceptual_loss = []
     step_lsa_loss = []
     epoch = 0
@@ -365,6 +371,7 @@ def main(args) -> None:
         
             lqs = batch["lqs"].permute(0, 1, 4, 2, 3) # B T H W C
             gts = batch["gts"].permute(0, 1, 4, 2, 3) # B T C H W to match decoder output
+            bs = lqs.size(0)
             T = lqs.size(1)
             center_gt = gts[:, T // 2, ...] # B 3 H W
         
@@ -409,6 +416,8 @@ def main(args) -> None:
 
                 # Downsample flow_bw to match latent space size (1, 4, 64, 64) with the highest precision possible
                 flow_bw = F.interpolate(flow_bw, size=(64, 64), mode='bilinear', align_corners=True)
+                flow_bw[:, 0] *= (64 / cfg.dataset.train.params.out_size)   # scale dx
+                flow_bw[:, 1] *= (64 / cfg.dataset.train.params.out_size)   # scale dy
                 flow_vectors.append(flow_bw)
 
             del lqs
@@ -426,42 +435,45 @@ def main(args) -> None:
             
             aligned_latents = torch.stack(aligned_latents, dim=1) # B T C H W
             # Average of aligned lqs ---> Changed to learned solution
+
             merged_latent = fusion_vit(aligned_latents)
+            # Sanity check: Send center latent directly
+            # merged_latent = latents[T//2]
 
-            # DEBUG:
-            if global_step % cfg.log_every == 0:
-                # Save merged latent's 2nd channel to disk
-                merged_latent_png = (merged_latent[0, 1, ...]).detach().cpu().numpy().astype('uint8')
-                merged_latent_png = np.repeat(merged_latent_png[ :, :, np.newaxis], 3, axis=2)
-                Image.fromarray(merged_latent_png).save(os.path.join(exp_dir, f"merged_latent_{global_step:06d}.png"))
-
-                # Save center latent's 2nd channel to disk
-                center_latent = latents[center_t]
-                center_latent_png = (center_latent[0, 1, ...]).detach().cpu().numpy().astype('uint8')
-                center_latent_png = np.repeat(center_latent_png[:, :, np.newaxis], 3, axis=2)
-                Image.fromarray(center_latent_png).save(os.path.join(exp_dir, f"center_latent_{global_step:06d}.png"))
 
             del aligned_latents, flow_vectors, latents
             torch.cuda.empty_cache()
 
-            if cfg.use_unet:
+            if cfg.train_unet:
                 ls_burst_unet.train()
                 z_in = (merged_latent * 0.18215).to(weight_dtype) # vae scaling factor
-                timesteps = torch.full((1,), cfg.model_t, dtype=torch.long, device=device)
+                timesteps = torch.full((bs,), cfg.model_t, dtype=torch.long, device=device)
                 eps = ls_burst_unet(
                     z_in,
                     timesteps,
-                    encoder_hidden_states=encode_prompt("")["text_embed"],
+                    encoder_hidden_states=encode_prompt("", bs=bs)["text_embed"],
                 ).sample
                 z = scheduler.step(eps, cfg.coeff_t, z_in).pred_original_sample
-                decoded_refined = (vae.decode(z.float() / 0.18215)).float() # B 3 H W
+                with torch.no_grad():
+                    decoded_refined = (vae.decode(z.float() / 0.18215)).float() # B 3 H W
             else:
-                decoded_refined = vae.decode(merged_latent).float() # B 3 H W
+                ls_burst_unet.eval()
+                with torch.no_grad():
+                    # For VAE sanity: z = merged_latent
+                    z_in = (merged_latent * 0.18215).to(weight_dtype) # vae scaling factor
+                    timesteps = torch.full((bs,), cfg.model_t, dtype=torch.long, device=device)
+                    eps = ls_burst_unet(
+                        z_in,
+                        timesteps,
+                        encoder_hidden_states=encode_prompt("", bs=bs)["text_embed"],
+                    ).sample
+                    z = scheduler.step(eps, cfg.coeff_t, z_in).pred_original_sample
+                    decoded_refined = (vae.decode(z.float() / 0.18215)).float() # B 3 H W
             
             decoded_refined = decoded_refined.clamp(0, 1)
 
             with torch.amp.autocast("cuda", dtype=torch.float16):
-                loss, loss_dict = compute_burst_loss(center_gt, decoded_refined, lpips_model, scales=cfg.loss_scales, 
+                loss, loss_dict = compute_burst_loss((center_gt+1.)/2., decoded_refined, lpips_model, scales=cfg.loss_scales, 
                                                      loss_mode=cfg.loss_mode, z_gt=z_center, z_fused=merged_latent)
             
             accelerator.backward(loss)
@@ -474,16 +486,16 @@ def main(args) -> None:
             pbar.update(1)
             global_step += 1
             step_lsa_loss.append(loss_dict["lsa_loss"])
-            step_l1_loss.append(loss_dict["l1_loss"])
+            step_l2_loss.append(loss_dict["l2_loss"])
             step_perceptual_loss.append(loss_dict["perceptual"])
             epoch_loss.append(loss.item())
 
             # Log loss values:
             if global_step % cfg.log_every == 0 or global_step == 1:
                 # Gather values from all processes
-                avg_l1_loss = (
+                avg_l2_loss = (
                     accelerator.gather(
-                        torch.tensor(step_l1_loss, device=device).unsqueeze(0)
+                        torch.tensor(step_l2_loss, device=device).unsqueeze(0)
                     )
                     .mean()
                     .item()
@@ -504,29 +516,46 @@ def main(args) -> None:
                 )
 
                 step_lsa_loss.clear()
-                step_l1_loss.clear()
+                step_l2_loss.clear()
                 step_perceptual_loss.clear()
 
                 if accelerator.is_local_main_process:
-                    writer.add_scalar("train/l1_loss_step", avg_l1_loss, global_step)
+                    writer.add_scalar("train/l2_loss_step", avg_l2_loss, global_step)
                     writer.add_scalar("train/perceptual_loss_step", avg_perceptual_loss, global_step)
                     writer.add_scalar("train/lsa_loss_step", avg_lsa_loss, global_step)
 
             # Save out & gt on disk
             if global_step % cfg.log_every == 0 or global_step == 1:
-                pred = (decoded_refined * 255.).detach().cpu().numpy().astype('uint8')
-                center_gt = (((center_gt+1)/2.) * 255.).cpu().numpy().astype('uint8')
-                Image.fromarray(pred[0].transpose(1, 2, 0)).save(os.path.join(exp_dir, f"merged_burst_{global_step:06d}.png"))
-                Image.fromarray(center_gt[0].transpose(1, 2, 0)).save(os.path.join(exp_dir, f"gt_center_{global_step:06d}.png"))
+                # pred = (decoded_refined * 255.).detach().cpu().numpy().astype('uint8')
+                # center_gt = (((center_gt+1)/2.) * 255.).cpu().numpy().astype('uint8')
+                # Image.fromarray(pred[0].transpose(1, 2, 0)).save(os.path.join(exp_dir, f"merged_burst_{global_step:06d}.png"))
+                # Image.fromarray(center_gt[0].transpose(1, 2, 0)).save(os.path.join(exp_dir, f"gt_center_{global_step:06d}.png"))
+                log_gt, log_pred = (center_gt[0]+1.)/2., decoded_refined[0]
+
+                log_merged_latent_png = (merged_latent[0, 1, ...]).detach().cpu().numpy().astype('uint8')
+                log_merged_latent_png = np.repeat(log_merged_latent_png[:, :, np.newaxis], 3, axis=2)
+                Image.fromarray(log_merged_latent_png).save(os.path.join(exp_dir, f"merged_latent_{global_step:06d}.png"))
+                
+                log_center_latent = z_center[0, 1, ...].detach().cpu().numpy().astype('uint8')
+                log_center_latent = np.repeat(log_center_latent[:, :, np.newaxis], 3, axis=2)
+                Image.fromarray(log_center_latent).save(os.path.join(exp_dir, f"center_latent_{global_step:06d}.png"))
+                if accelerator.is_local_main_process:
+                    for tag, image in [
+                        ("image/pred", log_pred),
+                        ("image/gt", log_gt),
+                        # ("image/merged_latent", log_merged_latent_png),
+                        # ("image/center_latent", log_center_latent),
+                    ]:
+                        writer.add_image(tag, make_grid(image, nrow = 2), global_step)
 
             # Save checkpoint:
             if global_step % cfg.checkpointing_steps == 0:
                 if accelerator.is_local_main_process:
-                    if cfg.use_unet:
-                        checkpoint = ls_burst_unet.state_dict()
+                    if cfg.train_unet:
+                        checkpoint = accelerator.unwrap_model(ls_burst_unet).state_dict()
                         ckpt_path = f"{ckpt_dir}/ls_burst_unet_{global_step:07d}.pt"
                         torch.save(checkpoint, ckpt_path)
-                    checkpoint_vit = fusion_vit.state_dict()
+                    checkpoint_vit = accelerator.unwrap_model(fusion_vit).state_dict()
                     ckpt_path_vit = f"{ckpt_dir}/fusion_vit_{global_step:07d}.pt"
                     torch.save(checkpoint_vit, ckpt_path_vit)
                     

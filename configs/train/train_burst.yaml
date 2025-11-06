@@ -1,4 +1,4 @@
-output_dir: /media/agarg54/Extreme SSD/code/gQVR/experiments_burst_fusionVIT_noUnet
+output_dir: /media/agarg54/Extreme SSD/code/gQVR/experiments_stage3
 
 dataset:
   batch_transform:
@@ -13,26 +13,26 @@ dataset:
         target: gqvr.dataset.file_backend.HardDiskBackend
       out_size: 512
       crop_type: "center"
-      use_hflip: False
+      use_hflip: false
       precomputed_latents: false
       sliding_window: 10
       chunk_size: 11
       mosaic: false
 
-  val:
-    batch_size: 1
-    num_workers: 24
-    target: gqvr.dataset.spc_video.VideoDataset
-    params:
-      file_list: /home/argar/apgi/gQVR/dataset_txt_files/video_dataset_txt_files/saved_latents_vids_val.txt
-      file_backend_cfg:
-        target: gqvr.dataset.file_backend.HardDiskBackend
-      out_size: 512
-      crop_type: "center"
-      use_hflip: False
-      precomputed_latents: True
-      sliding_window: 28
-      chunk_size: 30
+  # val:
+  #   batch_size: 1
+  #   num_workers: 24
+  #   target: gqvr.dataset.spc_video.VideoDataset
+  #   params:
+  #     file_list: /home/argar/apgi/gQVR/dataset_txt_files/video_dataset_txt_files/saved_latents_vids_val.txt
+  #     file_backend_cfg:
+  #       target: gqvr.dataset.file_backend.HardDiskBackend
+  #     out_size: 256
+  #     crop_type: "center"
+  #     use_hflip: false
+  #     precomputed_latents: false
+  #     sliding_window: 10
+  #     chunk_size: 11
     batch_transform:
       target: gqvr.dataset.batch_transform.IdentityBatchTransform
 
@@ -62,15 +62,16 @@ model:
       dropout: 0.0
 
 prompt_training: false
-lifting_training: true
-qvae_path: "/media/agarg54/Extreme SSD/weights/gqvr_sd21/3bit_vae_10xlr_8xBS/0600000.pt"
+lifting_training: false
+qvae_path: /nobackup1/aryan/weights/continue_VAE_UA/checkpoints/0150000.pt
 
 # Loss params
-loss_mode: "gt_perceptual_lsa" # ["gt", "perceptual", "lsa"] 
+loss_mode: "lsa_mse_perceptual" # ["gt", "perceptual", "lsa"] 
 loss_scales:
-  l1: 75.
-  perceptual: 25.
-  lsa: 5.
+  l1: 0.
+  perceptual: 7.5
+  lsa: 1.
+  mse: 1000.
 
 
 lr_burst_model: 1e-5
@@ -80,14 +81,15 @@ opt_kwargs:
 
 mixed_precision: bf16
 seed: 310
-max_train_steps: 100000
-checkpointing_steps: 1000
+max_train_steps: 500000
+checkpointing_steps: 2500
 checkpoints_total_limit: None
 resume_from_checkpoint: ~
-log_every: 100
+log_every: 500
 resume_training: False
 
-use_unet: false
+train_unet: false
+unet_weight_path: /nobackup1/aryan/weights/stage2_sd21_demosaic/checkpoints/checkpoint-80000/state_dict.pth
 base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
 model_t: 200
 coeff_t: 200

@@ -91,7 +91,8 @@ class LightweightHybrid3DFusion(nn.Module):
         patch_volume = self.c * (self.p_h * self.p_w)
         self.patch_proj = nn.Linear(patch_volume, embed_dim)
         self.patch_unproj = nn.Linear(embed_dim, patch_volume)
-
+        nn.init.zeros_(self.patch_unproj.weight)
+        nn.init.zeros_(self.patch_unproj.bias)
         # temporal transformer for per-patch tokens
         self.temporal_blocks = nn.ModuleList([TransformerBlockSimple(embed_dim, heads=t_heads, dim_head=embed_dim//t_heads,
                                                                       mlp_ratio=mlp_ratio, dropout=dropout)
@@ -104,10 +105,15 @@ class LightweightHybrid3DFusion(nn.Module):
         # gating and final residual projection
         self.gate = nn.Sequential(nn.Linear(embed_dim, embed_dim//4), nn.GELU(),
                                   nn.Linear(embed_dim//4, 1), nn.Sigmoid())
-        self.final_scale = nn.Parameter(torch.tensor(1.0))    # scale residual if needed
+        
+        self.final_scale = nn.Parameter(torch.tensor(0.05))    # scale residual if needed
         self.temp_param = nn.Parameter(torch.tensor(0.1))     # initial temperature
         self.sigma_param = nn.Parameter(torch.tensor(2.0))    # initial Gaussian width
-        
+
+        self.res_norm = nn.GroupNorm(num_groups=self.c, num_channels=self.c, affine=False)
+        self.smooth = nn.Conv2d(self.c, self.c, 3, padding=1, bias=False)
+        nn.init.zeros_(self.smooth.weight)   # so start is identity (no effect)
+
 
     def forward(self, Z, conf_mask=None):
         """
@@ -205,7 +211,10 @@ class LightweightHybrid3DFusion(nn.Module):
         out_patches = self.patch_unproj(fused_tokens)  # [B, Np, V]
         recon = rearrange(out_patches, 'b (hp wp) (c ph pw) -> b c (hp ph) (wp pw)', hp=ph, wp=pw, ph=self.p_h, pw=self.p_w)
         # recon shape: [B, C, H, W]
+        recon = self.res_norm(recon)
+        recon = self.smooth(recon)
 
         z_ref = Z[:, ref_idx]  # [B, C, H, W]
+        
         z_fused = z_ref + self.final_scale * recon
         return z_fused

@@ -34,7 +34,7 @@ class VideoDataset(data.Dataset):
                     sliding_window: int,
                     chunk_size: int,
                     precomputed_latents: bool = False,
-                    mosaic: bool = True) -> "VideoDataset":
+                    mosaic: bool = False) -> "VideoDataset":
         """
         Args:
             video_files (list of dict): each dict must contain:
@@ -56,6 +56,7 @@ class VideoDataset(data.Dataset):
         self.chunk_size = chunk_size
         self.bits = 3
         self.mosaic = mosaic
+        print(f"[+] Mosaic: {self.mosaic}")
         print(f"[+] Sim bits = {self.bits}")
 
 
