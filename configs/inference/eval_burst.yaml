@@ -14,7 +14,7 @@ dataset:
       out_size: 512
       crop_type: "center"
       use_hflip: false
-      sliding_window: 10
+      sliding_window: 1
       chunk_size: 11
       mosaic: false
 

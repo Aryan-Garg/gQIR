@@ -13,7 +13,7 @@ from torchvision.utils import make_grid
 from accelerate import Accelerator
 from accelerate.utils import set_seed
 from einops import rearrange
-from tqdm import tqdm
+from tqdm.auto import tqdm
 import lpips
 
 from transformers import CLIPTextModel, CLIPTokenizer
@@ -319,7 +319,7 @@ def main(args) -> None:
         dataset=dataset,
         batch_size=cfg.dataset.val.batch_size,
         num_workers=cfg.dataset.val.num_workers,
-        drop_last=True,
+        drop_last=False,
         shuffle=False,
         persistent_workers=False, 
         prefetch_factor=2
@@ -330,15 +330,12 @@ def main(args) -> None:
     psnr_list = []
     ssim_list = []
     lpips_list = []
-
+    total_psnr = 0.0
+    total_ssim = 0.0
+    total_lpips = 0.0
+    total_reconstructed_frames = 0
     # Training loop:
-    pbar = tqdm(
-            iterable=None,
-            disable=not accelerator.is_local_main_process,
-            unit="step",
-            total=len(loader),
-        )
-    for batch in loader:
+    for ididid, batch in tqdm(enumerate(loader)):
         with torch.inference_mode():
             to(batch, device)
             batch = batch_transform(batch)
@@ -427,9 +424,9 @@ def main(args) -> None:
             log_gt_png = (log_gt * 255.).cpu().numpy().astype('uint8').transpose(1, 2, 0)
             log_pred_png = (log_pred * 255.).cpu().numpy().astype('uint8').transpose(1, 2, 0)
             log_lq_png = (log_lq * 255.).cpu().numpy().astype('uint8').transpose(1, 2, 0)
-            Image.fromarray(log_lq_png).convert('L').save(os.path.join(exp_dir, f"lq_{global_step:06d}.png"))
-            Image.fromarray(log_gt_png).convert('L').save(os.path.join(exp_dir, f"gt_{global_step:06d}.png"))
-            Image.fromarray(log_pred_png).convert('L').save(os.path.join(exp_dir, f"pred_{global_step:06d}.png"))
+            Image.fromarray(log_lq_png).convert('L').save(os.path.join(exp_dir,   f"lq_{global_step:06d}.png"))
+            Image.fromarray(log_gt_png).convert('L').save(os.path.join(exp_dir,   f"gt_{global_step:06d}.png"))
+            Image.fromarray(log_pred_png).convert('L').save(os.path.join(exp_dir, f"out_{global_step:06d}.png"))
 
             # Compute full-reference metrics
             psnr, ssim, lpips_val = compute_full_reference_metrics( log_gt.to(device).unsqueeze(0), log_pred.unsqueeze(0) )
@@ -437,16 +434,24 @@ def main(args) -> None:
             ssim_list.append(ssim)
             lpips_list.append(lpips_val)
             # print(f"PSNR: {psnr:.2f} dB, SSIM: {ssim:.4f}, E*: {lpips_val:.4f}")
-            pbar.update(1)
             global_step += 1
 
-            pbar.set_description(f"PSNR: {np.mean(psnr_list):.2f} dB, SSIM: {np.mean(ssim_list):.4f}, lpips: {np.mean(lpips_list):.4f}")
-    pbar.close()
-    print(f"Final results over {len(psnr_list)} samples:")
-    print(f"PSNR: {np.mean(psnr_list):.2f} dB, SSIM: {np.mean(ssim_list):.4f}, lpips: {np.mean(lpips_list):.4f}")
+        # print(f"PSNR: {np.mean(psnr_list):.2f} dB, SSIM: {np.mean(ssim_list):.4f}, lpips: {np.mean(lpips_list):.4f}")
+        with open(os.path.join(exp_dir, "metrics.txt"), "a") as f:
+            f.write(f"Frame: {ididid} PSNR: {np.mean(psnr_list):.2f} dB, SSIM: {np.mean(ssim_list):.4f}, lpips: {np.mean(lpips_list):.4f}\n")
+        total_lpips += np.mean(lpips_list)
+        total_psnr += np.mean(psnr_list)
+        total_ssim += np.mean(ssim_list)
+        psnr_list = []
+        ssim_list = []
+        lpips_list = []
+        total_reconstructed_frames += 1
+
     with open(os.path.join(exp_dir, "final_results.txt"), "w") as f:
         f.write(f"Final results over {len(psnr_list)} samples:\n")
-        f.write(f"PSNR: {np.mean(psnr_list):.2f} dB, SSIM: {np.mean(ssim_list):.4f}, lpips: {np.mean(lpips_list):.4f}\n")
+        f.write(f"PSNR: {total_psnr / total_reconstructed_frames:.4f} dB, \
+                    SSIM: {total_ssim / total_reconstructed_frames:.4f}, \
+                    lpips: {total_lpips / total_reconstructed_frames:.4f}\n")
 
 
 if __name__ == "__main__":

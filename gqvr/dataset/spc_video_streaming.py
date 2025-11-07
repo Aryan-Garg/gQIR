@@ -61,6 +61,7 @@ class StreamingSlidingVideoDataset(IterableDataset):
         for img_name in png_files:
             image_path = os.path.join(correct_video_path, img_name)
             image = Image.open(image_path).convert("RGB")
+           
             # print(f"Loaded GT image size: {image.size}")
             if self.crop_type != "none":
                 if image.height == self.out_size and image.width == self.out_size:
