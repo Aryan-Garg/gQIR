@@ -142,7 +142,8 @@ def print_vram_state(msg=None, logger=None):
     return alloc, cache, peak
 
 
-def compute_flow_loss(pred_frames, gt_frames, raft_model):
+# This is also E^* metric
+def compute_flow_loss(pred_frames, gt_frames, raft_model): 
     B, T, C, H, W = pred_frames.shape
     err = 0.0 
     for i in range(T - 1):
@@ -187,6 +188,25 @@ def compute_burst_loss(gt, xhat_lq, lpips_model, scales, loss_mode="gt_perceptua
     return total_loss, loss_dict
 
 
+
+import piq
+def compute_full_reference_metrics(gt_img, out_img):
+    # PSNR SSIM LPIPS
+    
+    # print(gt_img.shape, out_img.shape)
+    # print(gt_img.max(), out_img.max(), gt_img.min(), out_img.min())
+    # print("Full-reference scores:")
+    psnr = piq.psnr(out_img, gt_img, data_range=1., reduction='none')
+    # print(f"PSNR: {psnr.item():.2f} dB")
+
+    ssim = piq.ssim(out_img, gt_img, data_range=1.) 
+    # print(f"SSIM: {ssim.item():.4f}")
+
+    lpips = piq.LPIPS(reduction='none')(out_img, gt_img)
+    # print(f"LPIPS: {lpips.item():.4f}")
+    return psnr.item(), ssim.item(), lpips.item()
+
+
 def main(args) -> None:
     # Setup accelerator:
     accelerator = Accelerator(split_batches=True)
@@ -198,8 +218,6 @@ def main(args) -> None:
     if accelerator.is_main_process:
         exp_dir = cfg.output_dir
         os.makedirs(exp_dir, exist_ok=True)
-        ckpt_dir = os.path.join(exp_dir, "checkpoints")
-        os.makedirs(ckpt_dir, exist_ok=True)
         print(f"Experiment directory created at {exp_dir}")
 
 
@@ -247,10 +265,11 @@ def main(args) -> None:
 
     # Replace naive averaging with a learned residual solution
     fusion_vit = LightweightHybrid3DFusion()
-    fusion_vit.train().requires_grad_(True)
+    fusion_ckpt = torch.load(cfg.fusion_vit_weight_path, map_location="cpu")
+    fusion_vit.load_state_dict(fusion_ckpt)
+    fusion_vit.eval().requires_grad_(False).to(device)
 
-    
-    print("[~] Using burst UNet refinement module")
+    # print("[~] Using burst UNet refinement module")
     tokenizer = CLIPTokenizer.from_pretrained(cfg.base_model_path, subfolder="tokenizer")
     text_encoder = CLIPTextModel.from_pretrained(cfg.base_model_path, subfolder="text_encoder", dtype=weight_dtype).to(device)
     text_encoder.eval().requires_grad_(False)
@@ -273,7 +292,7 @@ def main(args) -> None:
                                                          torch_dtype=torch.bfloat16).to(device)
     # Handle lora configuration
     target_modules = cfg.lora_modules
-    print(f"Add lora parameters to {target_modules}")
+    # print(f"Add lora parameters to {target_modules}")
     G_lora_cfg = LoraConfig(
         r=cfg.lora_rank,
         lora_alpha=cfg.lora_rank,
@@ -282,7 +301,7 @@ def main(args) -> None:
     )
     ls_burst_unet.add_adapter(G_lora_cfg)
 
-    print(f"Load UNet model weights from {cfg.unet_weight_path}")
+    # print(f"Load UNet model weights from {cfg.unet_weight_path}")
     state_dict = torch.load(cfg.unet_weight_path, map_location="cpu", weights_only=False)
     ls_burst_unet.load_state_dict(state_dict, strict=False)
     input_keys = set(state_dict.keys())
@@ -292,110 +311,61 @@ def main(args) -> None:
     assert required_keys == input_keys, f"Missing: {missing}, Unexpected: {unexpected}"
     ls_burst_unet.eval().requires_grad_(False)
 
-    # print(f"\n[~] All trainable RAFT model parameters: {(sum(p.numel() for p in raft_model.parameters() if p.requires_grad)) / 1e6:.2f}M")
-    print(f"\n[~] All RAFT model parameters: {(sum(p.numel() for p in raft_model.parameters())) / 1e6:.2f}M")
-    # print(f"[~] All trainable VAE model parameters: {sum(p.numel() for p in vae.parameters() if p.requires_grad) / 1e6:.2f}M")
-    print(f"[~] All VAE model parameters: {sum(p.numel() for p in vae.parameters()) / 1e6:.2f}M")
-    print(f"[~] All trainable fusionVIT model parameters: {sum(p.numel() for p in fusion_vit.parameters() if p.requires_grad) / 1e6:.2f}M")
+    print(f"[~] All fusionVIT model parameters: {sum(p.numel() for p in fusion_vit.parameters()) / 1e6:.2f}M")
     
-    print(f"[~] All trainable burst UNet parameters: {sum(p.numel() for p in ls_burst_unet.parameters() if p.requires_grad) / 1e6:.2f}M")
-    # print(f"[~] All trainable 3D merge module parameters: {sum(p.numel() for p in ls_burst_unet.parameters() if p.requires_grad) / 1e6:.2f}M")
-    print(f"[~] All burst UNet parameters: {sum(p.numel() for p in ls_burst_unet.parameters()) / 1e6:.2f}M")
-    print(f"[~] All text encoder parameters: {(sum(p.numel() for p in text_encoder.parameters())) / 1e6:.2f}M\n")
-    
-    # Setup optimizer:
-    all_params = list(fusion_vit.parameters())
-    if cfg.train_unet:
-        all_params += list(ls_burst_unet.parameters())
-    opt = torch.optim.AdamW(all_params, 
-        lr=cfg.lr_burst_model, 
-        **cfg.opt_kwargs)
-
     # Setup data:
-    dataset = instantiate_from_config(cfg.dataset.train)
+    dataset = instantiate_from_config(cfg.dataset.val)
     loader = DataLoader(
         dataset=dataset,
-        batch_size=cfg.dataset.train.batch_size,
-        num_workers=cfg.dataset.train.num_workers,
+        batch_size=cfg.dataset.val.batch_size,
+        num_workers=cfg.dataset.val.num_workers,
         drop_last=True,
-        shuffle=True,
+        shuffle=False,
+        persistent_workers=False, 
+        prefetch_factor=2
     )
 
     batch_transform = instantiate_from_config(cfg.dataset.batch_transform)
-
-    if cfg.train_unet:
-        ls_burst_unet, fusion_vit, opt, loader = accelerator.prepare(
-            ls_burst_unet, fusion_vit, opt, loader
-        )
-        # ls_burst_unet = accelerator.unwrap_model(ls_burst_unet) 
-    else:
-        fusion_vit, opt, loader = accelerator.prepare(
-            fusion_vit, opt, loader
-        )
-    # fusion_vit = accelerator.unwrap_model(fusion_vit) 
-
-    # Variables for monitoring/logging purposes:
     global_step = 0
-    max_steps = cfg.max_train_steps
-    step_l2_loss = []
-    step_perceptual_loss = []
-    step_lsa_loss = []
-    epoch = 0
-    epoch_loss = []
-
-   
-    with warnings.catch_warnings():
-        # avoid warnings from lpips internal
-        warnings.simplefilter("ignore")
-        lpips_model = (
-            lpips.LPIPS(net="vgg", verbose=accelerator.is_local_main_process)
-            .eval()
-            .to(device)
-        )
-
-    if accelerator.is_local_main_process:
-        writer = SummaryWriter(exp_dir)
-        print(f"Training for {max_steps} steps...")
+    psnr_list = []
+    ssim_list = []
+    lpips_list = []
 
     # Training loop:
     pbar = tqdm(
             iterable=None,
             disable=not accelerator.is_local_main_process,
             unit="step",
-            total=max_steps
+            total=len(loader),
         )
-    while global_step < max_steps:
-        for batch in loader:
+    for batch in loader:
+        with torch.inference_mode():
             to(batch, device)
             batch = batch_transform(batch)
-        
-            lqs = batch["lqs"].permute(0, 1, 4, 2, 3) # B T H W C
+
+            lqs = batch["lqs"].permute(0, 1, 4, 2, 3).to(device) # B T H W C
             gts = batch["gts"].permute(0, 1, 4, 2, 3) # B T C H W to match decoder output
             bs = lqs.size(0)
             T = lqs.size(1)
             center_gt = gts[:, T // 2, ...] # B 3 H W
-        
 
             # print("Lq details:")
             # print(lqs.shape, lqs.dtype, lqs[:, T//2, ...].min(), lqs[:, T//2, ...].max())
-            del gts # save VRAM
-            torch.cuda.empty_cache()
 
             latents = []
             Y = []
             with torch.no_grad():
-                z_center = vae.encode(center_gt).mode() # B 4 64 64
+                # z_center = vae.encode(center_gt).mode() # B 4 64 64
                 for t in range(T):
                     lq_t = lqs[:, t, ...] # B C H W
                     z = vae.encode(lq_t).mode()
                     latents.append(z)
                     lq_hat = vae.decode(z).float() # B 3 H W
                     Y.append(lq_hat)
-          
+
             # Merge lqs here using RAFT
             center_t = T // 2 
             Y = torch.stack(Y, dim=1) # B T C H W
-
             # print("Reconstructed lq details:")
             # print(lq_center.shape, lq_center.dtype, lq_center.min(), lq_center.max())
             # # Save lq_center to disk
@@ -413,17 +383,14 @@ def main(args) -> None:
                 else:
                     with torch.inference_mode():
                         _, flow_bw = raft_model(ls_in, center_in, iters=20, test_mode=True) # B 2 64 64
-
                 # Downsample flow_bw to match latent space size (1, 4, 64, 64) with the highest precision possible
                 flow_bw = F.interpolate(flow_bw, size=(64, 64), mode='bilinear', align_corners=True)
-                flow_bw[:, 0] *= (64 / cfg.dataset.train.params.out_size)   # scale dx
-                flow_bw[:, 1] *= (64 / cfg.dataset.train.params.out_size)   # scale dy
+                flow_bw[:, 0] *= (64 / cfg.dataset.val.params.out_size)   # scale dx
+                flow_bw[:, 1] *= (64 / cfg.dataset.val.params.out_size)   # scale dy
                 flow_vectors.append(flow_bw)
 
-            del lqs
-            torch.cuda.empty_cache()
-
             aligned_latents = []
+
             for t in range(T):
                 latent_t = latents[t] # B 4 64 64
                 if t == center_t:
@@ -432,20 +399,17 @@ def main(args) -> None:
                 flow_bw = flow_vectors[t] # B 2 64 64
                 warped_latent = differentiable_warp(latent_t, flow_bw) # B 4 64 64
                 aligned_latents.append(warped_latent)
-            
+
             aligned_latents = torch.stack(aligned_latents, dim=1) # B T C H W
             # Average of aligned lqs ---> Changed to learned solution
-
             merged_latent = fusion_vit(aligned_latents)
             # Sanity check: Send center latent directly
             # merged_latent = latents[T//2]
-
-
             del aligned_latents, flow_vectors, latents
             torch.cuda.empty_cache()
-
-            if cfg.train_unet:
-                ls_burst_unet.train()
+            ls_burst_unet.eval()
+            with torch.no_grad():
+                # For VAE sanity: z = merged_latent
                 z_in = (merged_latent * 0.18215).to(weight_dtype) # vae scaling factor
                 timesteps = torch.full((bs,), cfg.model_t, dtype=torch.long, device=device)
                 eps = ls_burst_unet(
@@ -454,134 +418,35 @@ def main(args) -> None:
                     encoder_hidden_states=encode_prompt("", bs=bs)["text_embed"],
                 ).sample
                 z = scheduler.step(eps, cfg.coeff_t, z_in).pred_original_sample
-                with torch.no_grad():
-                    decoded_refined = (vae.decode(z.float() / 0.18215)).float() # B 3 H W
-            else:
-                ls_burst_unet.eval()
-                with torch.no_grad():
-                    # For VAE sanity: z = merged_latent
-                    z_in = (merged_latent * 0.18215).to(weight_dtype) # vae scaling factor
-                    timesteps = torch.full((bs,), cfg.model_t, dtype=torch.long, device=device)
-                    eps = ls_burst_unet(
-                        z_in,
-                        timesteps,
-                        encoder_hidden_states=encode_prompt("", bs=bs)["text_embed"],
-                    ).sample
-                    z = scheduler.step(eps, cfg.coeff_t, z_in).pred_original_sample
-                    decoded_refined = (vae.decode(z.float() / 0.18215)).float() # B 3 H W
-            
+                decoded_refined = (vae.decode(z.float() / 0.18215)).float() # B 3 H W
+
             decoded_refined = decoded_refined.clamp(0, 1)
 
-            with torch.amp.autocast("cuda", dtype=torch.float16):
-                loss, loss_dict = compute_burst_loss((center_gt+1.)/2., decoded_refined, lpips_model, scales=cfg.loss_scales, 
-                                                     loss_mode=cfg.loss_mode, z_gt=z_center, z_fused=merged_latent)
-            
-            accelerator.backward(loss)
-            # accelerator.clip_grad_norm_(fusion_vit.parameters(), 1.0)
-            # accelerator.clip_grad_norm_(ls_burst_unet.parameters(), 1.0)
-            opt.step()
-            opt.zero_grad()
-            accelerator.wait_for_everyone()
+            # Save out & gt on disk
+            log_gt, log_pred, log_lq = (center_gt[0]+1.)/2., decoded_refined[0], (lqs[0, T//2, ...] + 1.) / 2.
+            log_gt_png = (log_gt * 255.).cpu().numpy().astype('uint8').transpose(1, 2, 0)
+            log_pred_png = (log_pred * 255.).cpu().numpy().astype('uint8').transpose(1, 2, 0)
+            log_lq_png = (log_lq * 255.).cpu().numpy().astype('uint8').transpose(1, 2, 0)
+            Image.fromarray(log_lq_png).convert('L').save(os.path.join(exp_dir, f"lq_{global_step:06d}.png"))
+            Image.fromarray(log_gt_png).convert('L').save(os.path.join(exp_dir, f"gt_{global_step:06d}.png"))
+            Image.fromarray(log_pred_png).convert('L').save(os.path.join(exp_dir, f"pred_{global_step:06d}.png"))
 
+            # Compute full-reference metrics
+            psnr, ssim, lpips_val = compute_full_reference_metrics( log_gt.to(device).unsqueeze(0), log_pred.unsqueeze(0) )
+            psnr_list.append(psnr)
+            ssim_list.append(ssim)
+            lpips_list.append(lpips_val)
+            # print(f"PSNR: {psnr:.2f} dB, SSIM: {ssim:.4f}, E*: {lpips_val:.4f}")
             pbar.update(1)
             global_step += 1
-            step_lsa_loss.append(loss_dict["lsa_loss"])
-            step_l2_loss.append(loss_dict["l2_loss"])
-            step_perceptual_loss.append(loss_dict["perceptual"])
-            epoch_loss.append(loss.item())
 
-            # Log loss values:
-            if global_step % cfg.log_every == 0 or global_step == 1:
-                # Gather values from all processes
-                avg_l2_loss = (
-                    accelerator.gather(
-                        torch.tensor(step_l2_loss, device=device).unsqueeze(0)
-                    )
-                    .mean()
-                    .item()
-                )
-                avg_perceptual_loss = (
-                    accelerator.gather(
-                        torch.tensor(step_perceptual_loss, device=device).unsqueeze(0)
-                    )
-                    .mean()
-                    .item()
-                )
-                avg_lsa_loss = (
-                    accelerator.gather(
-                        torch.tensor(step_lsa_loss, device=device).unsqueeze(0)
-                    )
-                    .mean()
-                    .item()
-                )
-
-                step_lsa_loss.clear()
-                step_l2_loss.clear()
-                step_perceptual_loss.clear()
-
-                if accelerator.is_local_main_process:
-                    writer.add_scalar("train/l2_loss_step", avg_l2_loss, global_step)
-                    writer.add_scalar("train/perceptual_loss_step", avg_perceptual_loss, global_step)
-                    writer.add_scalar("train/lsa_loss_step", avg_lsa_loss, global_step)
-
-            # Save out & gt on disk
-            if global_step % cfg.log_every == 0 or global_step == 1:
-                # pred = (decoded_refined * 255.).detach().cpu().numpy().astype('uint8')
-                # center_gt = (((center_gt+1)/2.) * 255.).cpu().numpy().astype('uint8')
-                # Image.fromarray(pred[0].transpose(1, 2, 0)).save(os.path.join(exp_dir, f"merged_burst_{global_step:06d}.png"))
-                # Image.fromarray(center_gt[0].transpose(1, 2, 0)).save(os.path.join(exp_dir, f"gt_center_{global_step:06d}.png"))
-                log_gt, log_pred = (center_gt[0]+1.)/2., decoded_refined[0]
-
-                log_merged_latent_png = (merged_latent[0, 1, ...]).detach().cpu().numpy().astype('uint8')
-                log_merged_latent_png = np.repeat(log_merged_latent_png[:, :, np.newaxis], 3, axis=2)
-                Image.fromarray(log_merged_latent_png).save(os.path.join(exp_dir, f"merged_latent_{global_step:06d}.png"))
-
-                log_center_latent = z_center[0, 1, ...].detach().cpu().numpy().astype('uint8')
-                log_center_latent = np.repeat(log_center_latent[:, :, np.newaxis], 3, axis=2)
-                Image.fromarray(log_center_latent).save(os.path.join(exp_dir, f"center_latent_{global_step:06d}.png"))
-                if accelerator.is_local_main_process:
-                    for tag, image in [
-                        ("image/pred", log_pred),
-                        ("image/gt", log_gt),
-                        # ("image/merged_latent", log_merged_latent_png),
-                        # ("image/center_latent", log_center_latent),
-                    ]:
-                        writer.add_image(tag, make_grid(image, nrow = 2), global_step)
-
-            # Save checkpoint:
-            if global_step % cfg.checkpointing_steps == 0:
-                if accelerator.is_local_main_process:
-                    if cfg.train_unet:
-                        checkpoint = accelerator.unwrap_model(ls_burst_unet).state_dict()
-                        ckpt_path = f"{ckpt_dir}/ls_burst_unet_{global_step:07d}.pt"
-                        torch.save(checkpoint, ckpt_path)
-                    checkpoint_vit = accelerator.unwrap_model(fusion_vit).state_dict()
-                    ckpt_path_vit = f"{ckpt_dir}/fusion_vit_{global_step:07d}.pt"
-                    torch.save(checkpoint_vit, ckpt_path_vit)
-                    
-
-            if global_step == max_steps:
-                break
-
-        pbar.set_description(
-            f"Epoch: {epoch:04d}, Global Step: {global_step:06d}, Loss: {loss.item():.6f}"
-        )
-        epoch += 1
-        avg_epoch_loss = (
-            accelerator.gather(torch.tensor(epoch_loss, device=device).unsqueeze(0))
-            .mean()
-            .item()
-        )
-        epoch_loss.clear()
-        if accelerator.is_local_main_process:
-            writer.add_scalar("train/total_loss_epoch", avg_epoch_loss, global_step)
-
-    if accelerator.is_local_main_process:
-        print("Done!")
-        writer.close()
-        pbar.close()
-
-    accelerator.end_training()
+            pbar.set_description(f"PSNR: {np.mean(psnr_list):.2f} dB, SSIM: {np.mean(ssim_list):.4f}, lpips: {np.mean(lpips_list):.4f}")
+    pbar.close()
+    print(f"Final results over {len(psnr_list)} samples:")
+    print(f"PSNR: {np.mean(psnr_list):.2f} dB, SSIM: {np.mean(ssim_list):.4f}, lpips: {np.mean(lpips_list):.4f}")
+    with open(os.path.join(exp_dir, "final_results.txt"), "w") as f:
+        f.write(f"Final results over {len(psnr_list)} samples:\n")
+        f.write(f"PSNR: {np.mean(psnr_list):.2f} dB, SSIM: {np.mean(ssim_list):.4f}, lpips: {np.mean(lpips_list):.4f}\n")
 
 
 if __name__ == "__main__":

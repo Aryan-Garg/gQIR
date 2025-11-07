@@ -15,7 +15,6 @@ from gqvr.dataset.utils import srgb_to_linearrgb, emulate_spc, center_crop_arr
 from gqvr.model.generator import SD2Enhancer
 
 import matplotlib.pyplot as plt
-
 to_tensor = transforms.ToTensor()
 
 def process(image, prompt, upscale, save_Gprocessed_latents: bool = False, fname:str = "", seed=310, onlyVAE_output=False):
@@ -432,7 +431,7 @@ if __name__ == "__main__":
         eval_single_image(args.single_img_path, 
                           color=True, 
                           idx_iter=0, 
-                          givenprompt="Crocodile with sharp teeth on the lake shore, high resolution, detailed, professional photography")
+                          givenprompt="")
         # NOTE: This snipped below is useful for evaluating XD-burst:
         # frame_id = int(args.single_img_path.split("/")[-1].split(".")[0].split("_")[-1])
         # for i in tqdm(range(1,12)):

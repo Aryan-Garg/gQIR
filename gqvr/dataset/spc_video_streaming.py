@@ -16,23 +16,19 @@ from torch.utils.data import IterableDataset
 
 from .utils import load_video_file_list, center_crop_arr, random_crop_arr, srgb_to_linearrgb, emulate_spc
 from ..utils.common import instantiate_from_config
+from torch.utils.data import get_worker_info
 
 
-class SlidingLatentVideoDataset(IterableDataset):
-    """
-    Streams multiple precomputed latent videos from disk and yields sliding windows of T frames.
-    Assumes precomputed latents are stored as .pt tensors.
-    """
+class StreamingSlidingVideoDataset(IterableDataset):
     def __init__(self,
                     file_list: str,
                     file_backend_cfg: Mapping[str, Any],
                     out_size: int,
                     crop_type: str,
                     use_hflip: bool,
-                    sliding_window: int,
-                    chunk_size: int,
-                    precomputed_latents: bool = False,
-                    mosaic: bool = True) -> "SlidingLatentVideoDataset":
+                    sliding_window: int = 1 ,
+                    chunk_size: int = 11,
+                    mosaic: bool = False) -> "StreamingSlidingVideoDataset":
         """
         Args:
             video_files (list of dict): each dict must contain:
@@ -49,7 +45,6 @@ class SlidingLatentVideoDataset(IterableDataset):
         self.use_hflip = use_hflip # No need for 1.5M big dataset
         assert self.crop_type in ["none", "center", "random"]
         self.HARDDISK_DIR = "/media/agarg54/Extreme SSD/"
-        self.precomputed_latents = precomputed_latents
         self.sliding_window = sliding_window
         self.chunk_size = chunk_size
         self.bits = 3
@@ -57,15 +52,8 @@ class SlidingLatentVideoDataset(IterableDataset):
         print(f"[+] Sim bits = {self.bits}")
 
 
-    def _load_video(self, video_path):
-        """Load all precomputed latent tensors from a single video folder."""
+    def _load_video(self, video_path, rng=None):
         correct_video_path =  self.HARDDISK_DIR + video_path[2:]
-        if self.precomputed_latents:
-            latent_files = sorted([f for f in os.listdir(correct_video_path) if f.endswith(".pt")])
-            latents = []
-            for lf in latent_files:
-                latent = torch.load(os.path.join(correct_video_path, lf), map_location="cpu")  # [1, 4 , 64, 64]
-                latents.append(latent)
 
         png_files = sorted([f for f in os.listdir(correct_video_path) if f.endswith(".png")])
         gts = []
@@ -90,22 +78,21 @@ class SlidingLatentVideoDataset(IterableDataset):
             img_lq_sum = np.zeros_like(image, dtype=np.float32)
             # NOTE: No motion-blur. Assumes SPC-fps >>> scene motion
             N = 2**self.bits - 1
-            for i in range(N): # 3-bit (2**3 - 1)
+            for k in range(N): # 3-bit (2**3 - 1)
                 if self.mosaic:
-                    img_lq_sum = img_lq_sum + self.get_mosaic(self.generate_spc_from_gt(image))
+                    bayer_pattern_type = rng.choice(["RGGB","GRBG","BGGR","GBRG"])
+                    img_lq_sum = img_lq_sum + self.get_mosaic(self.generate_spc_from_gt(image), bayer_pattern_type)
                 else:
                     img_lq_sum = img_lq_sum + self.generate_spc_from_gt(image)
             img_lq = img_lq_sum / (1.0*N)
             lqs.append(img_lq)
             gts.append(image)
 
-        if self.precomputed_latents:     
-            return torch.cat(latents, dim=0) , np.stack(gts, axis=0), np.stack(lqs, axis=0) # [T_total, 4, 64, 64]; [T_total, H, W, C]
-        else:
-            return None, np.stack(gts, axis=0), np.stack(lqs, axis=0)
+
+        return np.stack(gts, axis=0), np.stack(lqs, axis=0)
 
 
-    def get_mosaic(self, img):
+    def get_mosaic(self, img, bayer_pattern_type):
         """
             Convert a demosaiced RGB image (HxWx3) into an RGGB Bayer mosaic.
         """
@@ -115,7 +102,7 @@ class SlidingLatentVideoDataset(IterableDataset):
 
         bayer = np.zeros_like(img)
 
-        bayer_pattern_type = random.choice(["RGGB", "GRBG", "BGGR", "GBRG"])
+        # bayer_pattern_type = random.choice(["RGGB", "GRBG", "BGGR", "GBRG"])
 
         if bayer_pattern_type == "RGGB":
             # Red
@@ -154,6 +141,7 @@ class SlidingLatentVideoDataset(IterableDataset):
 
         return bayer
 
+
     def generate_spc_from_gt(self, img_gt, N=1):
         if img_gt is None:
             return None
@@ -164,12 +152,26 @@ class SlidingLatentVideoDataset(IterableDataset):
                         )
         return img
 
+
     def __iter__(self):
-        for video_info in self.video_files:
+        worker = get_worker_info()
+        if worker is None:
+            vid_iter = enumerate(self.video_files)
+        else:
+            # split video list across workers
+            per_worker = (len(self.video_files) + worker.num_workers - 1) // worker.num_workers
+            start = worker.id * per_worker
+            end = min(start + per_worker, len(self.video_files))
+            vid_iter = enumerate(self.video_files[start:end], start)
+
+        rng = np.random.RandomState(42 + (worker.id if worker else 0))  # deterministic per worker
+
+
+        for _, video_info in vid_iter:
             video_path = video_info["video_path"]
             # print(f"Loading video from {video_path}")
             try:
-                latents, gts, lqs = self._load_video(video_path)
+                gts, lqs = self._load_video(video_path, rng=rng)
             except Exception as e:
                 print(f"Error loading video from {video_path}: {e}")
                 continue
@@ -181,28 +183,21 @@ class SlidingLatentVideoDataset(IterableDataset):
             # Sliding window
             chunk_size = min(self.chunk_size, gts.shape[0])
             T_total = gts.shape[0]
-            for start_idx in range(0, T_total -  chunk_size + 1, self.sliding_window): # Currently manually set in the init fn
+            for start_idx in range(0, T_total -  chunk_size + 1, self.sliding_window):
                 gt_chunk = gts[start_idx:start_idx + chunk_size] 
                 lq_chunk = lqs[start_idx:start_idx + chunk_size]
-                if self.precomputed_latents:
-                    chunk = latents[start_idx:start_idx + chunk_size]  # [T, C, H, W]
-                    yield {"latents": chunk,        # [T, C, H, W]
-                            "gts": gt_chunk, 
-                            "lqs": lq_chunk}  # [T, H, W, C], [-1, 1], float32
-                else:
-                    yield {"gts": gt_chunk, "lqs": lq_chunk}
+                yield {"gts": gt_chunk, "lqs": lq_chunk}
     
 
 if __name__ == "__main__":
-    dataset = SlidingLatentVideoDataset(
+    dataset = StreamingSlidingVideoDataset(
         file_list="/media/agarg54/Extreme SSD/video_dataset_txt_files/udm10.txt",
         file_backend_cfg={"target": "gqvr.dataset.file_backend.HardDiskBackend"},
         out_size=512,
         crop_type="center",
         use_hflip=False,
-        precomputed_latents=False,
-        sliding_window=28,
-        chunk_size=30
+        sliding_window=1,
+        chunk_size=11
     )
     dataloader = data.DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0)
     for i, batch in enumerate(dataloader):

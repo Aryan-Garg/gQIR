@@ -1,4 +1,4 @@
-output_dir: /media/agarg54/Extreme SSD/code/gQVR/experiments_stage3
+output_dir: /media/agarg54/Extreme SSD/code/gQVR/experiments_stage3_copy
 
 dataset:
   batch_transform:
