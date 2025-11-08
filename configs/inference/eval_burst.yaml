@@ -61,3 +61,4 @@ lora_rank: 256
 lora_modules: [to_k, to_q, to_v, to_out.0, conv, conv1, conv2, conv_shortcut, conv_out, proj_in, proj_out, ff.net.2, ff.net.0.proj]
 
 fusion_vit_weight_path: /media/agarg54/Extreme SSD/code/gQVR/experiments_stage3/checkpoints/fusion_vit_0020000.pt
+save_imgs: false 

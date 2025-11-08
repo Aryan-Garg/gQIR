@@ -421,12 +421,13 @@ def main(args) -> None:
 
             # Save out & gt on disk
             log_gt, log_pred, log_lq = (center_gt[0]+1.)/2., decoded_refined[0], (lqs[0, T//2, ...] + 1.) / 2.
-            log_gt_png = (log_gt * 255.).cpu().numpy().astype('uint8').transpose(1, 2, 0)
-            log_pred_png = (log_pred * 255.).cpu().numpy().astype('uint8').transpose(1, 2, 0)
-            log_lq_png = (log_lq * 255.).cpu().numpy().astype('uint8').transpose(1, 2, 0)
-            Image.fromarray(log_lq_png).convert('L').save(os.path.join(exp_dir,   f"lq_{global_step:06d}.png"))
-            Image.fromarray(log_gt_png).convert('L').save(os.path.join(exp_dir,   f"gt_{global_step:06d}.png"))
-            Image.fromarray(log_pred_png).convert('L').save(os.path.join(exp_dir, f"out_{global_step:06d}.png"))
+            if cfg.save_imgs:
+                log_gt_png = (log_gt * 255.).cpu().numpy().astype('uint8').transpose(1, 2, 0)
+                log_pred_png = (log_pred * 255.).cpu().numpy().astype('uint8').transpose(1, 2, 0)
+                log_lq_png = (log_lq * 255.).cpu().numpy().astype('uint8').transpose(1, 2, 0)
+                Image.fromarray(log_lq_png).convert('L').save(os.path.join(exp_dir,   f"lq_{global_step:06d}.png"))
+                Image.fromarray(log_gt_png).convert('L').save(os.path.join(exp_dir,   f"gt_{global_step:06d}.png"))
+                Image.fromarray(log_pred_png).convert('L').save(os.path.join(exp_dir, f"out_{global_step:06d}.png"))
 
             # Compute full-reference metrics
             psnr, ssim, lpips_val = compute_full_reference_metrics( log_gt.to(device).unsqueeze(0), log_pred.unsqueeze(0) )
@@ -436,9 +437,9 @@ def main(args) -> None:
             # print(f"PSNR: {psnr:.2f} dB, SSIM: {ssim:.4f}, E*: {lpips_val:.4f}")
             global_step += 1
 
-        # print(f"PSNR: {np.mean(psnr_list):.2f} dB, SSIM: {np.mean(ssim_list):.4f}, lpips: {np.mean(lpips_list):.4f}")
+        print(f"PSNR: {np.mean(psnr_list):.2f} dB, SSIM: {np.mean(ssim_list):.4f}, lpips: {np.mean(lpips_list):.4f}")
         with open(os.path.join(exp_dir, "metrics.txt"), "a") as f:
-            f.write(f"Frame: {ididid} PSNR: {np.mean(psnr_list):.2f} dB, SSIM: {np.mean(ssim_list):.4f}, lpips: {np.mean(lpips_list):.4f}\n")
+            f.write(f"Frame: {ididid} PSNR: {np.mean(psnr_list):.4f} dB, SSIM: {np.mean(ssim_list):.4f}, lpips: {np.mean(lpips_list):.4f}\n")
         total_lpips += np.mean(lpips_list)
         total_psnr += np.mean(psnr_list)
         total_ssim += np.mean(ssim_list)
@@ -447,8 +448,7 @@ def main(args) -> None:
         lpips_list = []
         total_reconstructed_frames += 1
 
-    with open(os.path.join(exp_dir, "final_results.txt"), "w") as f:
-        f.write(f"Final results over {len(psnr_list)} samples:\n")
+    with open(os.path.join(exp_dir, "cumulative_metrics.txt"), "w") as f:
         f.write(f"PSNR: {total_psnr / total_reconstructed_frames:.4f} dB, \
                     SSIM: {total_ssim / total_reconstructed_frames:.4f}, \
                     lpips: {total_lpips / total_reconstructed_frames:.4f}\n")

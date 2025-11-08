@@ -53,27 +53,30 @@ class StreamingSlidingVideoDataset(IterableDataset):
 
 
     def _load_video(self, video_path, rng=None):
-        correct_video_path =  self.HARDDISK_DIR + video_path[2:]
-
-        png_files = sorted([f for f in os.listdir(correct_video_path) if f.endswith(".png")])
+        if video_path.startswith("./"):
+            correct_video_path =  self.HARDDISK_DIR + video_path[2:]
+        else:
+            correct_video_path =  video_path
+        png_files = sorted([f for f in os.listdir(correct_video_path) if f.endswith(".png") or f.endswith(".jpg")])
         gts = []
         lqs = []
         for img_name in png_files:
             image_path = os.path.join(correct_video_path, img_name)
             image = Image.open(image_path).convert("RGB")
-           
+            image = image.resize((self.out_size, self.out_size), Image.LANCZOS)
+            image = np.array(image)
             # print(f"Loaded GT image size: {image.size}")
-            if self.crop_type != "none":
-                if image.height == self.out_size and image.width == self.out_size:
-                    image = np.array(image)
-                else:
-                    if self.crop_type == "center":
-                        image = center_crop_arr(image, self.out_size)
-                    elif self.crop_type == "random":
-                        image = random_crop_arr(image, self.out_size, min_crop_frac=0.7)
-            else:
-                assert image.height == self.out_size and image.width == self.out_size
-                image = np.array(image)
+            # if self.crop_type != "none":
+            #     if image.height == self.out_size and image.width == self.out_size:
+            #         image = np.array(image)
+            #     else:
+            #         if self.crop_type == "center":
+            #             image = center_crop_arr(image, self.out_size)
+            #         elif self.crop_type == "random":
+            #             image = random_crop_arr(image, self.out_size, min_crop_frac=0.7)
+            # else:
+            #     assert image.height == self.out_size and image.width == self.out_size
+            #     image = np.array(image)
                 # hwc, rgb, 0,255, uint8
 
             img_lq_sum = np.zeros_like(image, dtype=np.float32)
