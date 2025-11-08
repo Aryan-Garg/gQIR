@@ -327,15 +327,12 @@ def main(args) -> None:
 
     batch_transform = instantiate_from_config(cfg.dataset.batch_transform)
     global_step = 0
-    psnr_list = []
-    ssim_list = []
-    lpips_list = []
     total_psnr = 0.0
     total_ssim = 0.0
     total_lpips = 0.0
-    total_reconstructed_frames = 0
     # Training loop:
-    for ididid, batch in tqdm(enumerate(loader)):
+    pbar = tqdm(total=6917)
+    for ididid, batch in enumerate(loader):
         with torch.inference_mode():
             to(batch, device)
             batch = batch_transform(batch)
@@ -431,27 +428,25 @@ def main(args) -> None:
 
             # Compute full-reference metrics
             psnr, ssim, lpips_val = compute_full_reference_metrics( log_gt.to(device).unsqueeze(0), log_pred.unsqueeze(0) )
-            psnr_list.append(psnr)
-            ssim_list.append(ssim)
-            lpips_list.append(lpips_val)
             # print(f"PSNR: {psnr:.2f} dB, SSIM: {ssim:.4f}, E*: {lpips_val:.4f}")
             global_step += 1
 
-        print(f"PSNR: {np.mean(psnr_list):.2f} dB, SSIM: {np.mean(ssim_list):.4f}, lpips: {np.mean(lpips_list):.4f}")
-        with open(os.path.join(exp_dir, "metrics.txt"), "a") as f:
-            f.write(f"Frame: {ididid} PSNR: {np.mean(psnr_list):.4f} dB, SSIM: {np.mean(ssim_list):.4f}, lpips: {np.mean(lpips_list):.4f}\n")
-        total_lpips += np.mean(lpips_list)
-        total_psnr += np.mean(psnr_list)
-        total_ssim += np.mean(ssim_list)
-        psnr_list = []
-        ssim_list = []
-        lpips_list = []
-        total_reconstructed_frames += 1
+            # print(f"PSNR: {np.mean(psnr_list):.2f} dB, SSIM: {np.mean(ssim_list):.4f}, lpips: {np.mean(lpips_list):.4f}")
 
-    with open(os.path.join(exp_dir, "cumulative_metrics.txt"), "w") as f:
-        f.write(f"PSNR: {total_psnr / total_reconstructed_frames:.4f} dB, \
-                    SSIM: {total_ssim / total_reconstructed_frames:.4f}, \
-                    lpips: {total_lpips / total_reconstructed_frames:.4f}\n")
+            # with open(os.path.join(exp_dir, "metrics.txt"), "a") as f:
+            #     f.write(f"Frame: {ididid} PSNR: {np.mean(psnr_list):.4f} dB, SSIM: {np.mean(ssim_list):.4f}, lpips: {np.mean(lpips_list):.4f}\n")
+            total_lpips += lpips_val
+            total_psnr += psnr
+            total_ssim += ssim
+            pbar.set_description(f"Running Metrics: PSNR: {total_psnr / global_step :.3f}, \
+                SSIM: {total_ssim / global_step :.3f}, lpips: { total_lpips / global_step :.3f}")
+            pbar.update(1)
+    pbar.close()
+
+    with open(os.path.join(exp_dir, f"cumulative_metrics_{str(int(100*cfg.dataset.val.params.target_PPP))}PPP.txt"), "w") as f:
+        f.write(f"PSNR: {total_psnr / global_step:.4f} dB, \
+                    SSIM: {total_ssim / global_step:.4f}, \
+                    lpips: {total_lpips / global_step:.4f}\n")
 
 
 if __name__ == "__main__":

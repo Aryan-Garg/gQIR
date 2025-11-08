@@ -28,7 +28,8 @@ class StreamingSlidingVideoDataset(IterableDataset):
                     use_hflip: bool,
                     sliding_window: int = 1 ,
                     chunk_size: int = 11,
-                    mosaic: bool = False) -> "StreamingSlidingVideoDataset":
+                    mosaic: bool = False,
+                    target_PPP = 3.50) -> "StreamingSlidingVideoDataset":
         """
         Args:
             video_files (list of dict): each dict must contain:
@@ -49,8 +50,11 @@ class StreamingSlidingVideoDataset(IterableDataset):
         self.chunk_size = chunk_size
         self.bits = 3
         self.mosaic = mosaic
+        self.target_PPP = target_PPP
+        self.factor = self.target_PPP / ((2**self.bits - 1) * 0.5) # Brightness scaling factor
         print(f"[+] Sim bits = {self.bits}")
-
+        print(f"[+] Sim mosaic = {self.mosaic}")
+        print(f"[+] Sim target PPP = {self.target_PPP} => Sim brightness factor = {self.factor}")
 
     def _load_video(self, video_path, rng=None):
         if video_path.startswith("./"):
@@ -85,9 +89,9 @@ class StreamingSlidingVideoDataset(IterableDataset):
             for k in range(N): # 3-bit (2**3 - 1)
                 if self.mosaic:
                     bayer_pattern_type = rng.choice(["RGGB","GRBG","BGGR","GBRG"])
-                    img_lq_sum = img_lq_sum + self.get_mosaic(self.generate_spc_from_gt(image), bayer_pattern_type)
+                    img_lq_sum = img_lq_sum + self.get_mosaic(self.generate_spc_from_gt(image, self.factor), bayer_pattern_type)
                 else:
-                    img_lq_sum = img_lq_sum + self.generate_spc_from_gt(image)
+                    img_lq_sum = img_lq_sum + self.generate_spc_from_gt(image, self.factor)
             img_lq = img_lq_sum / (1.0*N)
             lqs.append(img_lq)
             gts.append(image)
@@ -146,13 +150,13 @@ class StreamingSlidingVideoDataset(IterableDataset):
         return bayer
 
 
-    def generate_spc_from_gt(self, img_gt, N=1):
+    def generate_spc_from_gt(self, img_gt, N=1.0):
         if img_gt is None:
             return None
         img = srgb_to_linearrgb(img_gt / 255.)
         # TODO: Add linearrgb to spad curve 
         img = emulate_spc(img, 
-                          factor= 1. / N # Brightness directly proportional to this hparam. 1.0 => scene's natural lighting
+                          factor= N # Brightness directly proportional to this hparam. 1.0 => scene's natural lighting
                         )
         return img
 
