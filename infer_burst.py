@@ -438,8 +438,7 @@ def main(args) -> None:
             total_lpips += lpips_val
             total_psnr += psnr
             total_ssim += ssim
-            pbar.set_description(f"Running Metrics: PSNR: {total_psnr / global_step :.3f}, \
-                SSIM: {total_ssim / global_step :.3f}, lpips: { total_lpips / global_step :.3f}")
+            pbar.set_description(f"Running Avg: PSNR: {total_psnr / global_step :.3f}, SSIM: {total_ssim / global_step :.3f}, LPIPS: { total_lpips / global_step :.3f}")
             pbar.update(1)
     pbar.close()
 
