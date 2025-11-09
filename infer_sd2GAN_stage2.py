@@ -210,7 +210,9 @@ def compute_no_reference_metrics(out_img):
     return maniqa_score, clipiqa_score, musiq_score #, deqa_score
 
 
-def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False, idx_iter=None, onlyVAE_output=False, givenprompt=""):
+def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False,
+                       idx_iter=None, onlyVAE_output=False, givenprompt="", save_imgs=None, 
+                       output_dir='untitled_eval'):
     if gt_image_path:
         gt_img = Image.open(gt_image_path)
         gt_img = gt_img.convert("RGB")
@@ -240,7 +242,7 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False,
     result = (gt_img, img_lq, out[-1], out[0]) # (GT image, LQ image, prompt, reconstructed image)
 
     # Save results
-    output_dir = f"/nobackup1/aryan/results/prompt_experiments/untitled"
+    output_dir = f"/nobackup1/aryan/results/sd21/burst_testset_evaluation_s2/{output_dir}/"  # NOTE: CHANGE THIS PATH AS NEEDED
     os.makedirs(output_dir, exist_ok=True)
 
     gt_img_torch = to_tensor(result[0]).unsqueeze(0)
@@ -255,9 +257,13 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False,
         lq_img_pil = Image.fromarray((img_lq*255).astype(np.uint8)).convert('L')
         reconstructed_pil = result[-1].convert('L')
 
-    gt_img_pil.save(os.path.join(output_dir, f"gt_{'color' if color else 'mono'}_{str(idx_iter).zfill(4)}.png"))
-    lq_img_pil.save(os.path.join(output_dir, f"lq_{'color' if color else 'mono'}_{str(idx_iter).zfill(4)}.png"))
-    reconstructed_pil.save(os.path.join(output_dir, f"out_{'color' if color else 'mono'}_{str(idx_iter).zfill(4)}.png"))
+    if save_imgs is not None:
+        if save_imgs.get("gt", False):      
+            gt_img_pil.save(os.path.join(output_dir, f"gt_{'color' if color else 'mono'}_{str(idx_iter).zfill(6)}.png"))
+        if save_imgs.get("lq", False):      
+            lq_img_pil.save(os.path.join(output_dir, f"lq_{'color' if color else 'mono'}_{str(idx_iter).zfill(6)}.png"))
+        if save_imgs.get("out", False):
+            reconstructed_pil.save(os.path.join(output_dir, f"out_{'color' if color else 'mono'}_{str(idx_iter).zfill(6)}.png"))
     return gt_img_torch, out_img_torch
     # return psnr, ssim, lpips, maniqa, clipiqa, musiq
 
@@ -339,6 +345,9 @@ if __name__ == "__main__":
     parser.add_argument("--only_vae", action='store_true', help="Return VAE reconstructions")
     parser.add_argument("--eval_single_image", action='store_true', help="Return single img recon")
     parser.add_argument("--single_img_path", type=str, default="", help="If running single image inference, give path")
+
+    parser.add_argument("--eval_gt_dir", action='store_true', help="Run eval on all images in GT dir")
+    parser.add_argument("--gt_dir", type=str, default="", help="If running eval on GT dir, give path")
     args = parser.parse_args()
 
     # Set device
@@ -440,6 +449,18 @@ if __name__ == "__main__":
         #     frame_id += 1
 
     # save_all_video_Gprocessed_latents_to_disk(args.ds_txt)
+
+    if args.eval_gt_dir:
+        assert os.path.exists(args.gt_dir), f"Invalid GT dir path: {args.gt_dir}"
         
+        gt_image_files = sorted([f for f in sorted(os.listdir(args.gt_dir)) if f.endswith(".png") or f.endswith(".jpg")])
+        for idx, gt_image_file in enumerate(tqdm(gt_image_files)):
+            gt_image_path = os.path.join(args.gt_dir, gt_image_file)
+            eval_single_image(gt_image_path, 
+                              color=False, 
+                              idx_iter= gt_image_file.split("_")[-1].split(".")[0], 
+                              givenprompt="",
+                              save_imgs={"gt": False, "lq": False, "out": True}, 
+                              output_dir=args.gt_dir.split("/")[-1][:-3])
     
  
