@@ -242,7 +242,7 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False,
     result = (gt_img, img_lq, out[-1], out[0]) # (GT image, LQ image, prompt, reconstructed image)
 
     # Save results
-    output_dir = f"/nobackup1/aryan/results/sd21/burst_testset_evaluation_s2/{output_dir}/"  # NOTE: CHANGE THIS PATH AS NEEDED
+    output_dir = f"/nobackup1/aryan/results/sd21_burst/{output_dir}/"  # NOTE: CHANGE THIS PATH AS NEEDED
     os.makedirs(output_dir, exist_ok=True)
 
     gt_img_torch = to_tensor(result[0]).unsqueeze(0)
@@ -438,9 +438,10 @@ if __name__ == "__main__":
     if args.eval_single_image:
         assert os.path.exists(args.single_img_path), f"Invalid path: {args.single_img_path}"
         eval_single_image(args.single_img_path, 
-                          color=True, 
+                          color=config.color, 
                           idx_iter=0, 
-                          givenprompt="")
+                          givenprompt="lion cub playing in the grass, high quality photo, detailed, 8k",
+                          save_imgs={"gt": False, "lq": True, "out": True})
         # NOTE: This snipped below is useful for evaluating XD-burst:
         # frame_id = int(args.single_img_path.split("/")[-1].split(".")[0].split("_")[-1])
         # for i in tqdm(range(1,12)):
@@ -458,6 +459,7 @@ if __name__ == "__main__":
             gt_image_path = os.path.join(args.gt_dir, gt_image_file)
             eval_single_image(gt_image_path, 
                               color=False, 
+                              onlyVAE_output=args.only_vae,
                               idx_iter= gt_image_file.split("_")[-1].split(".")[0], 
                               givenprompt="",
                               save_imgs={"gt": False, "lq": False, "out": True}, 
