@@ -27,7 +27,7 @@ class StreamingSlidingVideoDataset(IterableDataset):
                     crop_type: str,
                     use_hflip: bool,
                     sliding_window: int = 1 ,
-                    chunk_size: int = 11,
+                    chunk_size: int = 77,
                     mosaic: bool = False,
                     target_PPP = 3.50) -> "StreamingSlidingVideoDataset":
         """
@@ -48,13 +48,13 @@ class StreamingSlidingVideoDataset(IterableDataset):
         self.HARDDISK_DIR = "/media/agarg54/Extreme SSD/"
         self.sliding_window = sliding_window
         self.chunk_size = chunk_size
-        self.bits = 3
+        self.bits = 1
         self.mosaic = mosaic
         self.target_PPP = target_PPP
-        self.factor = self.target_PPP / ((2**self.bits - 1) * 0.5) # Brightness scaling factor
+        self.factor = 1 # self.target_PPP / ((2**self.bits - 1) * 0.5) # Brightness scaling factor
         print(f"[+] Sim bits = {self.bits}")
         print(f"[+] Sim mosaic = {self.mosaic}")
-        print(f"[+] Sim target PPP = {self.target_PPP} => Sim brightness factor = {self.factor}")
+        # print(f"[+] Sim target PPP = {self.target_PPP} => Sim brightness factor = {self.factor}")
 
     def _load_video(self, video_path, rng=None):
         if video_path.startswith("./"):

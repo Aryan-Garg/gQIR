@@ -25,7 +25,7 @@ dataset:
       file_list: /media/agarg54/Extreme SSD/dataset_files/combined_dataset.txt
       file_backend_cfg:
         target: gqvr.dataset.file_backend.HardDiskBackend
-      out_size: 512
+      out_size: 256
       crop_type: "center"
       use_hflip: False
   val:
@@ -45,9 +45,10 @@ batch_transform:
 
 train:
   # pretrained sd v2.1-zsnr path
-  sd_path: "/media/agarg54/Extreme SSD/weights/gqvr_sd21/mosaic_3bit_Stage1_SD21/checkpoints/0250000.pt"
+  # sd_path: "/media/agarg54/Extreme SSD/weights/gqvr_sd21/mosaic_3bit_Stage1_SD21/checkpoints/0250000.pt"
+  sd_path: "/media/agarg54/Extreme SSD/weights/sd21_pretrained/sd2.1-base-zsnr-laionaes5.ckpt"
   # experiment directory path
-  exp_dir: "/nobackup1/aryan/weights/continue_VAE_UA_mosaic"
+  exp_dir: "/nobackup1/aryan/weights/ablation_predegradation_removal_loss"
   learning_rate: 1e-5
   batch_size: 1
   num_workers: 32
@@ -57,9 +58,10 @@ train:
   image_every: 200
   val_every: 500
   # Loss params
-  loss_mode: "mse_ls_gt_perceptual" # "mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual"
+  loss_mode: "ablation_predegradation_removal" # Best: mse_ls_gt_perceptual. Others: "mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual", 
   loss_scales:
     lsa: 0.1
-    mse: 1000.
+    # mse: 1000. (Best)
+    mse: 1 # For ablation
     gt: 100.
     perceptual: 2.

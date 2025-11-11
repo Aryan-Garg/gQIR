@@ -1,4 +1,4 @@
-output_dir: /media/agarg54/Extreme SSD/code/gQVR/eval_burst
+output_dir: /media/agarg54/Extreme SSD/code/gQVR/eval_burst_realistic
 
 dataset:
   batch_transform:
@@ -8,14 +8,15 @@ dataset:
     num_workers: 1
     target: gqvr.dataset.spc_video_streaming.StreamingSlidingVideoDataset
     params:
-      file_list: /media/agarg54/Extreme SSD/video_dataset_txt_files/i2k2_test.txt
+      # file_list: /media/agarg54/Extreme SSD/video_dataset_txt_files/i2k2_test.txt
+      file_list: /media/agarg54/Extreme SSD/video_dataset_txt_files/burst_test.txt
       file_backend_cfg:
         target: gqvr.dataset.file_backend.HardDiskBackend
       out_size: 512
       crop_type: "center"
       use_hflip: false
-      sliding_window: 1
-      chunk_size: 11
+      sliding_window: 35
+      chunk_size: 77
       mosaic: false
       target_PPP: 3.5
 
@@ -62,4 +63,4 @@ lora_rank: 256
 lora_modules: [to_k, to_q, to_v, to_out.0, conv, conv1, conv2, conv_shortcut, conv_out, proj_in, proj_out, ff.net.2, ff.net.0.proj]
 
 fusion_vit_weight_path: /media/agarg54/Extreme SSD/code/gQVR/experiments_stage3/checkpoints/fusion_vit_0020000.pt
-save_imgs: false 
+save_imgs: true 

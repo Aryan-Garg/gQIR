@@ -89,6 +89,10 @@ class BaseEnhancer:
         else:
             z = self.forward_generator(z_lq) # (N x 4 x 64 x 64) for (N, 3, 512, 512) input
 
+        # log_latent_png = z[0, 1, ...].to(torch.float32).detach().cpu().numpy().astype('uint8')
+        # log_latent_png = np.repeat(log_latent_png[:, :, np.newaxis], 3, axis=2)
+        # Image.fromarray(log_latent_png).save(f"lq_encoded_latent.png")
+        # exit()
         if save_Gprocessed_latents:
             assert fname != "", "No file name provided but save G-processed latents is on"
             torch.save(z.to(self.weight_dtype).detach().cpu(), fname)

@@ -45,6 +45,9 @@ def compute_loss(gt, z_gt, z_pred, xhat_gt, xhat_lq, lpips_model, loss_mode, sca
             perceptual_loss = (scales.perceptual_gt * lpips_model(xhat_gt, gt)) + \
                 (scales.perceptual_lq * lpips_model(xhat_lq, gt))
             loss_dict["perceptual"] = perceptual_loss.item()
+    elif "ablation_predegradation_removal" == loss_mode:
+        mse_loss = scales.mse * F.mse_loss(xhat_lq, xhat_gt, reduction="mean")
+        loss_dict["mse"] = mse_loss.item()
     else:
         raise NotImplementedError("[!] Always use Latent Space Alignment (LSA) loss")
 
@@ -58,7 +61,7 @@ def main(args) -> None:
     set_seed(310)
     device = accelerator.device
     cfg = OmegaConf.load(args.config)
-    assert cfg.train.loss_mode in ["mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual"], f"Please choose a supported loss_mode from: ['mse_ls', 'ls_only', 'ls_gt', 'ls_gt_perceptual']"
+    assert cfg.train.loss_mode in ["mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual", "ablation_predegradation_removal"], f"Please choose a supported loss_mode from: ['mse_ls', 'ls_only', 'ls_gt', 'ls_gt_perceptual']"
     # Setup an experiment folder:
     if accelerator.is_main_process:
         exp_dir = cfg.train.exp_dir

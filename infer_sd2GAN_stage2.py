@@ -440,7 +440,7 @@ if __name__ == "__main__":
         eval_single_image(args.single_img_path, 
                           color=config.color, 
                           idx_iter=0, 
-                          givenprompt="lion cub playing in the grass, high quality photo, detailed, 8k",
+                          givenprompt="",
                           save_imgs={"gt": False, "lq": True, "out": True})
         # NOTE: This snipped below is useful for evaluating XD-burst:
         # frame_id = int(args.single_img_path.split("/")[-1].split(".")[0].split("_")[-1])

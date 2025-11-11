@@ -59,7 +59,7 @@ train:
   image_every: 5000
   val_every: 5000
   # Loss params
-  loss_mode: "ls_gt_perceptual" # "mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual"
+  loss_mode: "ablation_predegradation_removal" # "ls_gt_perceptual" # "mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual"
   loss_scales:
     lsa: 0.01
     mse: 0.

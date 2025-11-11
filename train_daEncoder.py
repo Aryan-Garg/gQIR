@@ -44,6 +44,9 @@ def compute_loss(gt, z_gt, z_pred, xhat_lq, xhat_gt, lpips_model, loss_mode, sca
         if "perceptual" in loss_mode:
             perceptual_loss = scales.perceptual * lpips_model(xhat_lq, xhat_gt)
             loss_dict["perceptual"] = perceptual_loss.item()
+    elif "ablation_predegradation_removal" == loss_mode:
+        mse_loss = scales.mse * F.mse_loss(xhat_lq, xhat_gt, reduction="mean")
+        loss_dict["mse"] = mse_loss.item()
     else:
         raise NotImplementedError("[!] Always use Latent Space Alignment (LSA) loss")
 
@@ -57,7 +60,8 @@ def main(args) -> None:
     set_seed(310)
     device = accelerator.device
     cfg = OmegaConf.load(args.config)
-    assert cfg.train.loss_mode in ["mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual", "mse_ls_gt_perceptual"], f"Please choose a supported loss_mode from: ['mse_ls', 'ls_only', 'ls_gt', 'ls_gt_perceptual']"
+    assert cfg.train.loss_mode in ["mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual", "mse_ls_gt_perceptual", "ablation_predegradation_removal"], f"Please choose a supported loss_mode from: ['mse_ls', 'ls_only', 'ls_gt', 'ls_gt_perceptual']"
+    print(f"\nUsing loss mode: {cfg.train.loss_mode}\n")
     # Setup an experiment folder:
     if accelerator.is_main_process:
         exp_dir = cfg.train.exp_dir
@@ -68,10 +72,15 @@ def main(args) -> None:
 
 
     # Create & load VAE from pretrained SD model:
-    sd = torch.load(cfg.train.sd_path, map_location="cpu")
+    sd = torch.load(cfg.train.sd_path, map_location="cpu")['state_dict']
+    vae_sd = {k.replace("first_stage_model.", ""): v for k, v in sd.items() if k.startswith("first_stage_model.")}
     vae = AutoencoderKL(cfg.model.vae_cfg.ddconfig, cfg.model.vae_cfg.embed_dim)
-    # vae_sd = {k.replace("first_stage_model.", ""): v for k, v in sd.items() if k.startswith("first_stage_model.")}
-    missing_keys, unexpected_keys = vae.load_state_dict(sd, strict=True)
+    missing_keys, unexpected_keys = vae.load_state_dict(vae_sd, strict=False)
+    if cfg.train.loss_mode != "ablation_predegradation_removal":
+        frozen_vae = AutoencoderKL(cfg.model.vae_cfg.ddconfig, cfg.model.vae_cfg.embed_dim)
+        missing_keys, unexpected_keys = frozen_vae.load_state_dict(vae_sd, strict=True)
+        print("Created frozen decoder for gQIR like predegradation removal")
+
     if accelerator.is_main_process:
         print(
             f"Load pretrained SD weight from {cfg.train.sd_path}\n"
@@ -123,9 +132,16 @@ def main(args) -> None:
 
     # Prepare models for training/inference:
     vae.to(device)
-    vae, opt, loader, val_loader = accelerator.prepare(
-        vae, opt, loader, val_loader
-    )
+    if cfg.train.loss_mode != "ablation_predegradation_removal":
+        frozen_vae.encoder.to(device)
+        vae, frozen_vae.encoder, opt, loader, val_loader = accelerator.prepare(
+            vae, frozen_vae.encoder, opt, loader, val_loader
+        )
+    else:
+        vae, opt, loader, val_loader = accelerator.prepare(
+            vae, opt, loader, val_loader
+        )
+
     vae = accelerator.unwrap_model(vae)
 
     # Variables for monitoring/logging purposes:
@@ -147,6 +163,8 @@ def main(args) -> None:
                 .eval()
                 .to(device)
             )
+    else:
+        lpips_model = None
 
     if accelerator.is_local_main_process:
         writer = SummaryWriter(exp_dir)
@@ -170,9 +188,13 @@ def main(args) -> None:
             lq = rearrange(lq, "b h w c -> b c h w").contiguous().float()
 
             # Train step:
-            with torch.no_grad():
+            if cfg.train.loss_mode == "ablation_predegradation_removal":
                 gt_latent = vae.encode(gt).mode()
                 xhat_gt = vae.decode(gt_latent)
+            else:
+                with torch.no_grad():
+                    gt_latent = frozen_vae.encode(gt).mode()
+                    xhat_gt = frozen_vae.decode(gt_latent)
 
             pred_latent = vae.encode(lq).mode()
             xhat_lq = vae.decode(pred_latent).clamp(0,1)
@@ -299,8 +321,12 @@ def main(args) -> None:
                     )
                     with torch.no_grad():
                         lq_z = vae.encode(val_lq).mode()
-                        gt_z = vae.encode(val_gt).mode()
-                        xhat_gt = vae.decode(gt_z).clamp(0,1)
+                        if cfg.train.loss_mode != "ablation_predegradation_removal":
+                            gt_z = frozen_vae.encode(val_gt).mode()
+                            xhat_gt = frozen_vae.decode(gt_z).clamp(0,1)
+                        else:
+                            gt_z = vae.encode(val_gt).mode()
+                            xhat_gt = vae.decode(gt_z).clamp(0,1)
                         xhat_lq = vae.decode(lq_z).clamp(0,1)
                         vloss, vloss_dict = compute_loss((val_gt+1.)/2., gt_z, lq_z, xhat_lq, xhat_gt,
                                            lpips_model, cfg.train.loss_mode, cfg.train.loss_scales)
