@@ -35,20 +35,20 @@ def compute_loss(gt, z_gt, z_pred, xhat_lq, xhat_gt, lpips_model, loss_mode, sca
     if "ls" in loss_mode:
         ls_loss = scales.lsa * F.mse_loss(z_pred, z_gt, reduction="mean")
         loss_dict["lsa"] = ls_loss.item()
-        if "mse" in loss_mode:
-            mse_loss = scales.mse * F.mse_loss(xhat_lq, xhat_gt, reduction="mean")
-            loss_dict["mse"] = mse_loss.item()
-        if "gt" in loss_mode:
-            gt_loss = scales.gt * F.l1_loss(xhat_lq, xhat_gt, reduction="mean")
-            loss_dict["gt_loss"] = gt_loss.item()
-        if "perceptual" in loss_mode:
-            perceptual_loss = scales.perceptual * lpips_model(xhat_lq, xhat_gt)
-            loss_dict["perceptual"] = perceptual_loss.item()
-    elif "ablation_predegradation_removal" == loss_mode:
+    if "mse" in loss_mode:
         mse_loss = scales.mse * F.mse_loss(xhat_lq, xhat_gt, reduction="mean")
         loss_dict["mse"] = mse_loss.item()
-    else:
-        raise NotImplementedError("[!] Always use Latent Space Alignment (LSA) loss")
+    if "gt" in loss_mode:
+        gt_loss = scales.gt * F.l1_loss(xhat_lq, xhat_gt, reduction="mean")
+        loss_dict["gt_loss"] = gt_loss.item()
+    if "perceptual" in loss_mode:
+        perceptual_loss = scales.perceptual * lpips_model(xhat_lq, xhat_gt)
+        loss_dict["perceptual"] = perceptual_loss.item()
+    if "ablation_predegradation_removal" == loss_mode:
+        mse_loss = scales.mse * F.mse_loss(xhat_lq, xhat_gt, reduction="mean")
+        loss_dict["mse"] = mse_loss.item()
+    # else:
+    #     raise NotImplementedError("[!] Always use Latent Space Alignment (LSA) loss")
 
     total_loss = mse_loss + ls_loss + gt_loss + perceptual_loss
     return total_loss, loss_dict
@@ -57,10 +57,10 @@ def compute_loss(gt, z_gt, z_pred, xhat_lq, xhat_gt, lpips_model, loss_mode, sca
 def main(args) -> None:
     # Setup accelerator:
     accelerator = Accelerator(split_batches=True)
-    set_seed(310)
+    set_seed(42)
     device = accelerator.device
     cfg = OmegaConf.load(args.config)
-    assert cfg.train.loss_mode in ["mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual", "mse_ls_gt_perceptual", "ablation_predegradation_removal"], f"Please choose a supported loss_mode from: ['mse_ls', 'ls_only', 'ls_gt', 'ls_gt_perceptual']"
+    assert cfg.train.loss_mode in ["mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual", "mse_ls_gt_perceptual", "ablation_predegradation_removal", "mse_gt_perceptual"], f"Please choose a supported loss_mode from: ['mse_ls', 'ls_only', 'ls_gt', 'ls_gt_perceptual']"
     print(f"\nUsing loss mode: {cfg.train.loss_mode}\n")
     # Setup an experiment folder:
     if accelerator.is_main_process:
@@ -133,7 +133,7 @@ def main(args) -> None:
     # Prepare models for training/inference:
     vae.to(device)
     if cfg.train.loss_mode != "ablation_predegradation_removal":
-        frozen_vae.encoder.to(device)
+        frozen_vae.to(device)
         vae, frozen_vae.encoder, opt, loader, val_loader = accelerator.prepare(
             vae, frozen_vae.encoder, opt, loader, val_loader
         )
