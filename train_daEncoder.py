@@ -76,10 +76,10 @@ def main(args) -> None:
     vae_sd = {k.replace("first_stage_model.", ""): v for k, v in sd.items() if k.startswith("first_stage_model.")}
     vae = AutoencoderKL(cfg.model.vae_cfg.ddconfig, cfg.model.vae_cfg.embed_dim)
     missing_keys, unexpected_keys = vae.load_state_dict(vae_sd, strict=False)
-    if cfg.train.loss_mode != "ablation_predegradation_removal":
+    if not (cfg.train.loss_mode == "ablation_predegradation_removal"):
         frozen_vae = AutoencoderKL(cfg.model.vae_cfg.ddconfig, cfg.model.vae_cfg.embed_dim)
         missing_keys, unexpected_keys = frozen_vae.load_state_dict(vae_sd, strict=True)
-        print("Created frozen decoder for gQIR like predegradation removal")
+        print("Created frozen decoder for gQIR style predegradation removal")
 
     if accelerator.is_main_process:
         print(
@@ -131,18 +131,20 @@ def main(args) -> None:
     batch_transform = instantiate_from_config(cfg.batch_transform)
 
     # Prepare models for training/inference:
-    vae.to(device)
-    if cfg.train.loss_mode != "ablation_predegradation_removal":
-        frozen_vae.to(device)
-        vae, frozen_vae.encoder, opt, loader, val_loader = accelerator.prepare(
-            vae, frozen_vae.encoder, opt, loader, val_loader
+    
+    if not (cfg.train.loss_mode == "ablation_predegradation_removal"):
+        vae, frozen_vae, opt, loader, val_loader = accelerator.prepare(
+            vae, frozen_vae, opt, loader, val_loader
         )
+        vae.to(device)
+        frozen_vae.to(device)
     else:
         vae, opt, loader, val_loader = accelerator.prepare(
             vae, opt, loader, val_loader
         )
+        vae.to(device)
 
-    vae = accelerator.unwrap_model(vae)
+    pure_vae = accelerator.unwrap_model(vae)
 
     # Variables for monitoring/logging purposes:
     global_step = 0
@@ -189,14 +191,23 @@ def main(args) -> None:
 
             # Train step:
             if cfg.train.loss_mode == "ablation_predegradation_removal":
-                gt_latent = vae.encode(gt).mode()
+                if cfg.train.non_deterministic_sampling:
+                    gt_latent = vae.encode(gt).sample()
+                else:
+                    gt_latent = vae.encode(gt).mode()
                 xhat_gt = vae.decode(gt_latent)
             else:
                 with torch.no_grad():
-                    gt_latent = frozen_vae.encode(gt).mode()
+                    if cfg.train.non_deterministic_sampling:
+                        gt_latent = frozen_vae.encode(gt).sample()
+                    else:
+                        gt_latent = frozen_vae.encode(gt).mode()
                     xhat_gt = frozen_vae.decode(gt_latent)
 
-            pred_latent = vae.encode(lq).mode()
+            if cfg.train.non_deterministic_sampling:
+                pred_latent = vae.encode(lq).sample()
+            else:
+                pred_latent = vae.encode(lq).mode()
             xhat_lq = vae.decode(pred_latent).clamp(0,1)
 
             loss, loss_dict = compute_loss((gt+1.)/2., gt_latent, pred_latent, xhat_lq, xhat_gt,
@@ -263,7 +274,7 @@ def main(args) -> None:
             # Save checkpoint:
             if global_step % cfg.train.ckpt_every == 0 or global_step == 1:
                 if accelerator.is_local_main_process:
-                    checkpoint = vae.state_dict()
+                    checkpoint = pure_vae.state_dict()
                     ckpt_path = f"{ckpt_dir}/{global_step:07d}.pt"
                     torch.save(checkpoint, ckpt_path)
 
@@ -274,8 +285,12 @@ def main(args) -> None:
                 N = 4
                 log_gt, log_lq = (gt[:N]+1)/2, lq[:N]
                 with torch.no_grad():
-                    log_pred = vae.decode(vae.encode(log_lq).mode()).clamp(0,1)
-                    log_pred_gt = vae.decode(vae.encode(log_gt).mode()).clamp(0,1)
+                    if cfg.train.non_deterministic_sampling:
+                        log_pred = vae.decode(vae.encode(log_lq).sample()).clamp(0,1)
+                        log_pred_gt = frozen_vae.decode(frozen_vae.encode(log_gt).sample()).clamp(0,1)
+                    else:
+                        log_pred = vae.decode(vae.encode(log_lq).mode()).clamp(0,1)
+                        log_pred_gt = frozen_vae.decode(frozen_vae.encode(log_gt).mode()).clamp(0,1)
                     # print(log_pred.min(), log_pred.max())
                 if accelerator.is_local_main_process:
                     for tag, image in [
@@ -320,12 +335,21 @@ def main(args) -> None:
                         rearrange(val_lq, "b h w c -> b c h w").contiguous().float()
                     )
                     with torch.no_grad():
-                        lq_z = vae.encode(val_lq).mode()
+                        if cfg.train.non_deterministic_sampling:
+                            lq_z = vae.encode(val_lq).sample()
+                        else:
+                            lq_z = vae.encode(val_lq).mode()
                         if cfg.train.loss_mode != "ablation_predegradation_removal":
-                            gt_z = frozen_vae.encode(val_gt).mode()
+                            if cfg.train.non_deterministic_sampling:
+                                gt_z = frozen_vae.encode(val_gt).sample()
+                            else:
+                                gt_z = frozen_vae.encode(val_gt).mode()
                             xhat_gt = frozen_vae.decode(gt_z).clamp(0,1)
                         else:
-                            gt_z = vae.encode(val_gt).mode()
+                            if cfg.train.non_deterministic_sampling:
+                                gt_z = vae.encode(val_gt).sample()
+                            else:
+                                gt_z = vae.encode(val_gt).mode()
                             xhat_gt = vae.decode(gt_z).clamp(0,1)
                         xhat_lq = vae.decode(lq_z).clamp(0,1)
                         vloss, vloss_dict = compute_loss((val_gt+1.)/2., gt_z, lq_z, xhat_lq, xhat_gt,

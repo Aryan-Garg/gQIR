@@ -242,7 +242,7 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False,
     result = (gt_img, img_lq, out[-1], out[0]) # (GT image, LQ image, prompt, reconstructed image)
 
     # Save results
-    output_dir = f"/nobackup1/aryan/results/sd21_burst/{output_dir}/"  # NOTE: CHANGE THIS PATH AS NEEDED
+    output_dir = f"/nobackup1/aryan/results/ablation_vaes/{output_dir}/"  # NOTE: CHANGE THIS PATH AS NEEDED
     os.makedirs(output_dir, exist_ok=True)
 
     gt_img_torch = to_tensor(result[0]).unsqueeze(0)
@@ -269,25 +269,25 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False,
 
 
 
-def eval_single_real_input(lq_image_path, color=True):
+def eval_single_real_input(lq_image_path, color=True, only_vae=False):
     assert lq_image_path != None, "[!] Come on! Provide the input lq path dude!"
     img_lq = Image.open(lq_image_path).convert('RGB')
 
     # Resize to 512x512 & numpy-fy
-    img_lq_resized = np.array(img_lq.resize((512,512), Image.LANCZOS))[:,:,::-1]
+    img_lq_resized = np.array(img_lq.resize((512,512), Image.LANCZOS)) / 255.
     # Normalize to 0..1
-    img_lq_resized = (img_lq_resized - img_lq_resized.min()) / (img_lq_resized.max() - img_lq_resized.min())
+    # img_lq_resized = (img_lq_resized - img_lq_resized.min()) / (img_lq_resized.max() - img_lq_resized.min())
    
-    out = process(img_lq_resized, "Cute cats", upscale=1.0)
+    out = process(img_lq_resized, "", upscale=1.0, onlyVAE_output=only_vae)
     result = (img_lq, out[-1], out[0]) 
     
-    output_dir = "./evaluation_real_prompt/"
+    output_dir = "./realistic_iterative_s1/"
     os.makedirs(output_dir, exist_ok=True)
 
     lq_img_pil = Image.fromarray((img_lq_resized*255.).astype(np.uint8))
     # print(np.array(out[0]).shape, np.array(out[0]).min(), np.array(out[0]).max())
     reconstructed_pil = result[-1]
-    reconstructed_pil = Image.fromarray(np.array(reconstructed_pil))
+    reconstructed_pil = Image.fromarray(np.array(reconstructed_pil)).convert("L")
 
     lq_img_pil.save(os.path.join(output_dir, f"{lq_image_path.split('/')[-1][:-4]}_in.png"))
     reconstructed_pil.save(os.path.join(output_dir, f"{lq_image_path.split('/')[-1][:-4]}_out.png"))
@@ -401,12 +401,16 @@ if __name__ == "__main__":
             outs = []
             for line in tqdm(lines):
                 gt_image_path = os.path.join(prefix_path, line.strip()[2:])
-                gt, out = eval_single_image(gt_image_path = gt_image_path, color=config.color, idx_iter=curr_iter, onlyVAE_output=args.only_vae)
+                gt, out = eval_single_image(gt_image_path = gt_image_path, color=config.color, idx_iter=curr_iter, 
+                                            onlyVAE_output=args.only_vae, 
+                                            save_imgs={"gt": False, "lq": False, "out": True}, 
+                                            output_dir="ours")
                 gts.append(gt)
                 outs.append(out)
                 curr_iter += 1
 
-            for i in tqdm(range(len(gts))):
+            pbar = tqdm(total=len(gts))
+            for i in range(len(gts)):
                 psnr, ssim, lpips = compute_full_reference_metrics(gts[i], outs[i])
                 maniqa, clipiqa, musiq = compute_no_reference_metrics(outs[i])
                 psnr_list.append(psnr)
@@ -415,9 +419,11 @@ if __name__ == "__main__":
                 maniqa_list.append(maniqa)
                 clipiqa_list.append(clipiqa)
                 musiq_list.append(musiq)
+                pbar.set_description(f"PSNR: {np.mean(psnr_list)}")
+                pbar.update(1)
                 
 
-        with open(f"/nobackup1/aryan/results/evaluation{'color' if config.color else 'mono'}_Stage1.txt", "w") as f:
+        with open(f"/nobackup1/aryan/results/evaluation_abl_ours_{'color' if config.color else 'mono'}_Stage1.txt", "w") as f:
             f.write("Overall scores on full_test_set:\n")
             f.write("---------- FR scores ----------\n")
             f.write(f"Average PSNR: {np.mean(psnr_list):.2f} dB\n")
@@ -433,7 +439,7 @@ if __name__ == "__main__":
             lines = f.readlines()
             for line in tqdm(lines):
                 lq_path = line.strip()
-                eval_single_real_input(lq_image_path = lq_path)
+                eval_single_real_input(lq_image_path = lq_path, only_vae = args.only_vae)
 
     if args.eval_single_image:
         assert os.path.exists(args.single_img_path), f"Invalid path: {args.single_img_path}"

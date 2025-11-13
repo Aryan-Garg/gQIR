@@ -55,7 +55,7 @@ class SD2Enhancer(BaseEnhancer):
         vae_unused = set(daVAE.keys()) - vae_used
         
         if len(vae_unused) == 0:
-            print(f"[+] Loaded qVAE successfully\n")
+            print(f"[+] Loaded qVAE successfully from {self.vae_cfg.qvae_path}\n")
         else:
             print(f"[!] VAE keys NOT used: {vae_unused}\n")
 

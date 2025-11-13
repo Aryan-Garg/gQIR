@@ -48,20 +48,21 @@ train:
   # sd_path: "/media/agarg54/Extreme SSD/weights/gqvr_sd21/mosaic_3bit_Stage1_SD21/checkpoints/0250000.pt"
   sd_path: "/media/agarg54/Extreme SSD/weights/sd21_pretrained/sd2.1-base-zsnr-laionaes5.ckpt"
   # experiment directory path
-  exp_dir: "/nobackup1/aryan/weights/ablation_no_LSA"
+  exp_dir: "/nobackup1/aryan/weights/ablation_losses_ours"
   learning_rate: 1e-5
   batch_size: 1
   num_workers: 32
   train_steps: 100_000
   log_every: 5000
-  ckpt_every: 5000
+  ckpt_every: 10000
   image_every: 5000
   val_every: 5000
   # Loss params
-  loss_mode: "mse_gt_perceptual" # Best: mse_ls_gt_perceptual. Others: "mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual", "ablation_predegradation_removal"
+  loss_mode: "mse_ls_gt_perceptual" # Best: mse_ls_gt_perceptual. Others: "mse_ls", "ls_only", "ls_gt", "ls_gt_perceptual", "ablation_predegradation_removal"
   loss_scales:
     lsa: 0.1
     mse: 1000.
     # mse: 1 # For ablation
     gt: 100.
     perceptual: 2.
+  non_deterministic_sampling: false
