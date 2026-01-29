@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
+from fvcore.nn import FlopCountAnalysis
 
 # -------------------------
 # Small building blocks
@@ -218,3 +219,14 @@ class LightweightHybrid3DFusion(nn.Module):
         
         z_fused = z_ref + self.final_scale * recon
         return z_fused
+
+
+if __name__ == "__main__":
+    # simple test
+    B, T, C, H, W = 2, 11, 4, 64, 64
+    x = torch.randn(B, T, C, H, W)
+    model = LightweightHybrid3DFusion()
+    flops_fvit = FlopCountAnalysis(model, x)
+    print('FViT FLOPS:', flops_fvit.total() / 2) # divide by 2 cause bs was 2
+    # print("Input shape:", x.shape)
+    # print("Output shape:", out.shape)

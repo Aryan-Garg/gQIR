@@ -10,6 +10,9 @@ from gqvr.utils.common import wavelet_reconstruction, make_tiled_fn
 from gqvr.utils.tilevae import enable_tiled_vae
 
 import time
+from fvcore.nn import FlopCountAnalysis
+# flops = FlopCountAnalysis(model, qis_seq)
+# print('total flops', flops.total())
 
 class BaseEnhancer:
 
@@ -81,7 +84,16 @@ class BaseEnhancer:
         # VAE encoding
         lq = (lq * 2 - 1).to(dtype=self.weight_dtype, device=self.device)
         self.prepare_inputs(batch_size=bs, prompt=prompt)
-
+        
+        #################### VAE-Encoder: 542365450240 FLOPs
+        # self.vae.eval()
+        # self.vae.to(device=self.device, dtype=torch.float32)
+        # with torch.no_grad():
+        #     with torch.cuda.amp.autocast(enabled=False):
+        #         lq_vae = lq.to(torch.float32)
+        #         flops_vae = FlopCountAnalysis(self.vae.encoder, lq_vae)
+        #         print("VAE-Encoder FLOPs:", flops_vae.total())
+       ####################
         z_lq = self.vae.encode(lq.to(self.weight_dtype)).mode() 
 
         if only_vae_output:
@@ -98,6 +110,15 @@ class BaseEnhancer:
             torch.save(z.to(self.weight_dtype).detach().cpu(), fname)
             return 400
 
+        ############ VAE-Decoder FLOPs: 1242375913472
+        # self.vae.eval()
+        # self.vae.to(device=self.device, dtype=torch.float32)
+        # with torch.no_grad():
+        #     with torch.cuda.amp.autocast(enabled=False):
+        #         z_test = z.to(torch.float32)
+        #         flops_vae = FlopCountAnalysis(self.vae.decoder, z_test)
+        #         print("VAE-Decoder FLOPs:", flops_vae.total())
+        ############
         x = self.vae.decode(z.to(self.weight_dtype)).float()
 
         # FOr timings only:
@@ -107,7 +128,9 @@ class BaseEnhancer:
         #     end_time = time.time()
         #     print(f"Time taken for s2: {end_time - start_time} seconds")
 
-
+        # print("[1-bit] Debug", x.min(), x.max())
+        # # NOTE: Only for 1-bit model:
+        # x = (x + 1.) / 2.0 
         if return_type == "pt":
             return x.clamp(0, 1).cpu()
         elif return_type == "np":

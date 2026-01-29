@@ -5,6 +5,7 @@ from peft import LoraConfig
 
 from .backbone_generator import BaseEnhancer
 from gqvr.model.vae import AutoencoderKL
+from fvcore.nn import FlopCountAnalysis
 
 class SD2Enhancer(BaseEnhancer):
 
@@ -80,6 +81,10 @@ class SD2Enhancer(BaseEnhancer):
 
     def forward_generator(self, z_lq):
         z_in = z_lq * 0.18215 # Use self.vae.config.scaling_factor if using diffusers
+        # Output: UNet flops 531320586240
+        # flops_unet = FlopCountAnalysis(self.G, (z_in, self.inputs["timesteps"], self.inputs["c_txt"]["text_embed"]))
+        # print('UNet flops', flops_unet.total())
+
         eps = self.G(
             z_in, 
             self.inputs["timesteps"],

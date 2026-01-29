@@ -13,6 +13,8 @@ from tqdm import tqdm
 from gqvr.utils.common import instantiate_from_config
 from gqvr.dataset.utils import srgb_to_linearrgb, emulate_spc, center_crop_arr
 from gqvr.model.generator import SD2Enhancer
+import torchvision.transforms.functional as F
+from torchvision.transforms import InterpolationMode
 
 import matplotlib.pyplot as plt
 to_tensor = transforms.ToTensor()
@@ -58,12 +60,13 @@ def process(image, prompt, upscale, save_Gprocessed_latents: bool = False, fname
     return pil_image, f"Used prompt: {prompt}"
 
 
-def generate_spc_from_gt(img_gt):
+def generate_spc_from_gt(img_gt, factor=1.0):
     if img_gt is None:
         return None
     img = srgb_to_linearrgb(img_gt / 255.)
+    # E[PPP] = 3.5 * factor
     img = emulate_spc(img, 
-                      factor=1.0 # Brightness directly proportional to this hparam. 1.0 => scene's natural lighting
+                      factor=factor # Brightness directly proportional to this hparam. 1.0 => scene's natural lighting
                     )
     return img
 
@@ -191,15 +194,16 @@ musiqMODEL = pyiqa.create_metric('musiq', device=torch.device("cuda"))
 def compute_no_reference_metrics(out_img):
     # center crop to 224x224 for no-reference metrics
     _, _, h, w = out_img.shape
-    top = (h - 224) // 2
-    left = (w - 224) // 2
-    out_img = out_img[:, :, top:top+224, left:left+224]
+    # top = (h - 224) // 2
+    # left = (w - 224) // 2
+    # out_img = out_img[:, :, top:top+224, left:left+224]
+    out_img_resized = F.resize(out_img, (224, 224), interpolation=InterpolationMode.BILINEAR)
 
     # ManIQA DeQA MUSIQ ClipIQA
 
-    maniqa_score = maniqaMODEL(out_img).item()
-    clipiqa_score = clipiqaMODEL(out_img).item()
-    musiq_score = musiqMODEL(out_img).item()
+    maniqa_score = maniqaMODEL(out_img_resized).item()
+    clipiqa_score = clipiqaMODEL(out_img_resized).item()
+    musiq_score = musiqMODEL(out_img_resized).item()
     # deqa_score = deqa.score([Image.fromarray((out_img.squeeze(0).permute(1,2,0).cpu().numpy()*255).astype(np.uint8))])[0]
 
     # print("No-reference scores:")
@@ -210,14 +214,15 @@ def compute_no_reference_metrics(out_img):
     return maniqa_score, clipiqa_score, musiq_score #, deqa_score
 
 
+
 def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False,
                        idx_iter=None, onlyVAE_output=False, givenprompt="", save_imgs=None, 
-                       output_dir='untitled_eval'):
+                       output_dir='deformable', target_ppp=3.50):
     if gt_image_path:
         gt_img = Image.open(gt_image_path)
         gt_img = gt_img.convert("RGB")
-        gt_img = center_crop_arr(gt_img, 512)  # Center Crop to 512x512
-        # gt_img = np.array(gt_img.resize((512 ,288)))
+        # gt_img = center_crop_arr(gt_img, 512)  # Center Crop to 512x512
+        gt_img = np.array(gt_img.resize((512 ,512)))
 
         if lq_image_path == None: # LQ image simulation
             bits = lq_bits
@@ -225,11 +230,12 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False,
             img_lq_sum = np.zeros_like(gt_img, dtype=np.float32)
             for i in range(N): # 4-bit (2**4 - 1)
                 # Bayer:
+                factor_input = target_ppp / 3.50
                 if color:
-                    img_lq_sum = img_lq_sum + get_mosaic(generate_spc_from_gt(gt_img))
+                    img_lq_sum = img_lq_sum + get_mosaic(generate_spc_from_gt(gt_img, factor=factor_input))    
                 # DeMosaiced:
                 else:
-                    img_lq_sum = img_lq_sum + generate_spc_from_gt(gt_img)
+                    img_lq_sum = img_lq_sum + generate_spc_from_gt(gt_img, factor=factor_input)                 
             img_lq = img_lq_sum / (1.0*N)
         else:
             img_lq = Image.open(lq_image_path)
@@ -239,10 +245,11 @@ def eval_single_image(gt_image_path, lq_image_path=None, lq_bits=3, color=False,
 
 
     out = process(img_lq, givenprompt, upscale=1.0, onlyVAE_output=onlyVAE_output)
+    # print(f"[+] Out: {out}")
     result = (gt_img, img_lq, out[-1], out[0]) # (GT image, LQ image, prompt, reconstructed image)
 
     # Save results
-    output_dir = f"/nobackup1/aryan/results/ablation_vaes/{output_dir}/"  # NOTE: CHANGE THIS PATH AS NEEDED
+    output_dir = f"/nobackup1/aryan/results/sd21/{output_dir}/"  # NOTE: CHANGE THIS PATH AS NEEDED
     os.makedirs(output_dir, exist_ok=True)
 
     gt_img_torch = to_tensor(result[0]).unsqueeze(0)
@@ -403,8 +410,9 @@ if __name__ == "__main__":
                 gt_image_path = os.path.join(prefix_path, line.strip()[2:])
                 gt, out = eval_single_image(gt_image_path = gt_image_path, color=config.color, idx_iter=curr_iter, 
                                             onlyVAE_output=args.only_vae, 
-                                            save_imgs={"gt": False, "lq": False, "out": True}, 
-                                            output_dir="ours")
+                                            lq_bits=1,  # NOTE
+                                            save_imgs={"gt": False, "lq": True, "out": True}, 
+                                            output_dir="ours_1-bit")
                 gts.append(gt)
                 outs.append(out)
                 curr_iter += 1
@@ -421,10 +429,12 @@ if __name__ == "__main__":
                 musiq_list.append(musiq)
                 pbar.set_description(f"PSNR: {np.mean(psnr_list)}")
                 pbar.update(1)
+                # with open(f"/nobackup1/aryan/results/sd21_no_text/evaluation_framewise_s1_{'color' if config.color else 'mono'}.txt", "a") as f:
+                #     f.write(f"{lines[i].strip()}: {psnr}/{ssim}/{lpips} {maniqa}/{clipiqa}/{musiq}\n")
                 
-
-        with open(f"/nobackup1/aryan/results/evaluation_abl_ours_{'color' if config.color else 'mono'}_Stage1.txt", "w") as f:
-            f.write("Overall scores on full_test_set:\n")
+        # NOTE: hardcoded 
+        with open(f"/nobackup1/aryan/results/sd21/evaluation_1-bit_{'color' if config.color else 'mono'}_Stage_2.txt", "a") as f: 
+            f.write("\n\nOverall scores on full_test_set:\n")
             f.write("---------- FR scores ----------\n")
             f.write(f"Average PSNR: {np.mean(psnr_list):.2f} dB\n")
             f.write(f"Average SSIM: {np.mean(ssim_list):.4f}\n")
@@ -447,7 +457,30 @@ if __name__ == "__main__":
                           color=config.color, 
                           idx_iter=0, 
                           givenprompt="",
-                          save_imgs={"gt": False, "lq": True, "out": True})
+                          save_imgs={"gt": True, "lq": True, "out": True}, 
+                          onlyVAE_output=args.only_vae,
+                          target_ppp = 3.5,
+                          lq_bits=3)
+        # Target PPP -> Factor
+        # 3.5   -> 1.0
+        # 3   -> 0.8571428571428571
+        # 2.5 -> 0.71428
+        # 2   -> 0.57142857
+        # 1.5 -> 0.4285714
+        # 1   -> 0.28571428
+        # 0.5 -> 0.1428571
+        # 0.1 -> 0.0285714
+        # target_ppps = [26., 19.5, 9.75, 3.5, 3., 2.5, 2., 1.5, 1.0, 0.5, 0.1]
+        # for tar_ppp in tqdm(target_ppps):
+        #     eval_single_image(args.single_img_path, 
+        #                   color=config.color, 
+        #                   idx_iter=0, 
+        #                   givenprompt="",
+        #                   save_imgs={"gt": True, "lq": True, "out": True}, 
+        #                   onlyVAE_output=args.only_vae,
+        #                   target_ppp = tar_ppp,
+        #                   output_dir = f'ppp_{str(tar_ppp)}')
+
         # NOTE: This snipped below is useful for evaluating XD-burst:
         # frame_id = int(args.single_img_path.split("/")[-1].split(".")[0].split("_")[-1])
         # for i in tqdm(range(1,12)):
@@ -464,11 +497,12 @@ if __name__ == "__main__":
         for idx, gt_image_file in enumerate(tqdm(gt_image_files)):
             gt_image_path = os.path.join(args.gt_dir, gt_image_file)
             eval_single_image(gt_image_path, 
-                              color=False, 
+                              color=config.color, 
                               onlyVAE_output=args.only_vae,
                               idx_iter= gt_image_file.split("_")[-1].split(".")[0], 
                               givenprompt="",
                               save_imgs={"gt": False, "lq": False, "out": True}, 
-                              output_dir=args.gt_dir.split("/")[-1][:-3])
+                              output_dir='s3_vs_s2_ablation')
     
- 
+    
+    # if args.realistic_sim:
