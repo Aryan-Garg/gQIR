@@ -1,4 +1,4 @@
-output_dir: /media/agarg54/Extreme SSD/code/gQVR/experiments_stage3
+output_dir: /nobackup1/aryan/weights/stage3_sd21_mosaic
 
 dataset:
   batch_transform:
@@ -19,23 +19,23 @@ dataset:
       chunk_size: 11
       mosaic: true
 
-  val:
-    batch_size: 1
-    num_workers: 24
-    target: gqvr.dataset.spc_video.VideoDataset
-    params:
-      file_list: /home/argar/apgi/gQVR/dataset_txt_files/video_dataset_txt_files/saved_latents_vids_val.txt
-      file_backend_cfg:
-        target: gqvr.dataset.file_backend.HardDiskBackend
-      out_size: 256
-      crop_type: "center"
-      use_hflip: false
-      precomputed_latents: false
-      sliding_window: 28
-      chunk_size: 30
-      mosaic: true
-    batch_transform:
-      target: gqvr.dataset.batch_transform.IdentityBatchTransform
+  # val:
+  #   batch_size: 1
+  #   num_workers: 24
+  #   target: gqvr.dataset.spc_video.VideoDataset
+  #   params:
+  #     file_list: /home/argar/apgi/gQVR/dataset_txt_files/video_dataset_txt_files/saved_latents_vids_val.txt
+  #     file_backend_cfg:
+  #       target: gqvr.dataset.file_backend.HardDiskBackend
+  #     out_size: 256
+  #     crop_type: "center"
+  #     use_hflip: false
+  #     precomputed_latents: false
+  #     sliding_window: 28
+  #     chunk_size: 30
+  #     mosaic: true
+  #   batch_transform:
+  #     target: gqvr.dataset.batch_transform.IdentityBatchTransform
 
 # qVAE * temp config:    
 model:
@@ -72,7 +72,7 @@ loss_scales:
   l1: 0.
   perceptual: 2.5
   lsa: 0.1
-  mse: 10.
+  mse: 1000.
 
 
 lr_burst_model: 1e-5

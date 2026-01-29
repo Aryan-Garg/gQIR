@@ -63,13 +63,13 @@ model:
 
 prompt_training: false
 lifting_training: false
-qvae_path: /nobackup1/aryan/weights/continue_VAE_UA/checkpoints/0150000.pt
+qvae_path: /nobackup1/aryan/weights/continue_VAE_UA_mosaic/checkpoints/0105000.pt
 
 # Loss params
 loss_mode: "lsa_mse_perceptual" # ["gt", "perceptual", "lsa"] 
 loss_scales:
   l1: 0.
-  perceptual: 7.5
+  perceptual: 2.5
   lsa: 1.
   mse: 1000.
 
@@ -85,7 +85,7 @@ max_train_steps: 500000
 checkpointing_steps: 2500
 checkpoints_total_limit: None
 resume_from_checkpoint: ~
-log_every: 250
+log_every: 500
 resume_training: False
 
 train_unet: false

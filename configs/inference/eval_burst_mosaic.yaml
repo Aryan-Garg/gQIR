@@ -1,4 +1,4 @@
-output_dir: /nobackup1/aryan/results/sd21_s3_vs_s2_ablation/
+output_dir: /nobackup1/aryan/results/sd21_burst/japanAlley/
 
 dataset:
   batch_transform:
@@ -8,17 +8,17 @@ dataset:
     num_workers: 1
     target: gqvr.dataset.spc_video_streaming.StreamingSlidingVideoDataset
     params:
-      file_list: /media/agarg54/Extreme SSD/video_dataset_txt_files/i2k2_test.txt
+      # file_list: /media/agarg54/Extreme SSD/video_dataset_txt_files/i2k2_test.txt
       # file_list: /media/agarg54/Extreme SSD/video_dataset_txt_files/burst_test.txt
-      # file_list: /media/agarg54/Extreme SSD/video_dataset_txt_files/color_qbp_comp.txt
+      file_list: /media/agarg54/Extreme SSD/video_dataset_txt_files/color_qbp_comp.txt
       file_backend_cfg:
         target: gqvr.dataset.file_backend.HardDiskBackend
       out_size: 512
       crop_type: "center"
       use_hflip: false
-      sliding_window: 1
+      sliding_window: 35
       chunk_size: 77
-      mosaic: false
+      mosaic: true
       target_PPP: 3.5
 
     batch_transform:
@@ -51,18 +51,17 @@ model:
 
 prompt_training: false
 lifting_training: false
-qvae_path: /nobackup1/aryan/weights/continue_VAE_UA/checkpoints/0150000.pt
+qvae_path: /nobackup1/aryan/weights/continue_VAE_UA_mosaic/checkpoints/0105000.pt
 
 mixed_precision: bf16
 seed: 310
 
-unet_weight_path: /nobackup1/aryan/weights/stage2_sd21_demosaic/checkpoints/checkpoint-80000/state_dict.pth
+unet_weight_path: /nobackup1/aryan/weights/stage2_sd21_mosaic/checkpoints/checkpoint-100000/state_dict.pth
 base_model_path: ByteDance/sd2.1-base-zsnr-laionaes5
 model_t: 200
 coeff_t: 200
 lora_rank: 256
 lora_modules: [to_k, to_q, to_v, to_out.0, conv, conv1, conv2, conv_shortcut, conv_out, proj_in, proj_out, ff.net.2, ff.net.0.proj]
 
-fusion_vit_weight_path: /nobackup1/aryan/weights/stage3_sd21_demosaic/checkpoints/fusion_vit_0020000.pt
+fusion_vit_weight_path: /nobackup1/aryan/weights/stage3_sd21_mosaic/checkpoints/fusion_vit_0050000.pt
 save_imgs: true 
-save_only_center_y: true
