@@ -92,19 +92,16 @@ Key insight: Second channel of the encoded latents have the most semantic inform
 Currently the brightness scale/factor (proportional to PPP) is set to 1.0 for all simulations
 
 
-## <a id="citation"></a>Citation
-Please cite us if our work is useful for your research.
-
-<!-- TODO: Replace with conference bibtex after publication -->
+## <a id="Cite"></a>Citation
+Please cite our work if you find it useful. Thanks! :)
 
 ```bibtex
-@misc{garg2026_gqvr
-    title={gQVR: Generative Quanta Image Reconstruction},
-    author={Garg, Aryan and Ma, Sizhuo and  Gupta, Mohit},
-    year={2026},
-    eprint={},
-    archivePrefix={arXiv},
-    primaryClass={cs.CV}
+@InProceedings{garg_2026_gqir,
+    author    = {Garg, Aryan and Ma, Sizhuo and  Gupta, Mohit},
+    title     = {gQIR: Generative Quanta Image Reconstruction},
+    booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+    month     = {June},
+    year      = {2026},
 }
 ```
 
