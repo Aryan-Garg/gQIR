@@ -41,27 +41,36 @@ TODO
 
 ## <a id="inference"></a>Inference 
 
-> python3 infer_sd2GAN_stage2.py --config configs/inference/eval_sd2GAN.yaml 
-
+```bash
+python3 infer_sd2GAN_stage2.py --config configs/inference/eval_sd2GAN.yaml 
+```
 
 #### For real world captures:
 
-> python3 infer_sd2GAN_stage2.py --config configs/inference/eval_3bit_color.yaml --ds_txt ds_txt_real_captures.txt --real_captures
-
+```bash
+python3 infer_sd2GAN_stage2.py --config configs/inference/eval_3bit_color.yaml --ds_txt ds_txt_real_captures.txt --real_captures
+```
 
 ## <a id="training"></a>Training
 <!-- Arch Image -->
 
 #### Stage 1 - SPAD-CMOS Aligned VAE:
 
-> conda activate hypir
-> accelerate launch train_daEncoder.py --config configs/train/train_daEncoder.yaml
-> CUDA_VISIBLE_DEVICES=8,9,10,11,12,13,14,15 accelerate launch --main_process_port 29502 train_s1_mosaic.py --config configs/train/train_s1_mosaic_1bit.yaml
-> CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --main_process_port 29503 train_s1_mosaic.py --config configs/train/train_s1_mosaic_3bit.yaml
+```bash
+conda activate hypir   
+
+accelerate launch train_daEncoder.py --config configs/train/train_daEncoder.yaml
+
+CUDA_VISIBLE_DEVICES=8,9,10,11,12,13,14,15 accelerate launch --main_process_port 29502 train_s1_mosaic.py --config configs/train/train_s1_mosaic_1bit.yaml
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --main_process_port 29503 train_s1_mosaic.py --config configs/train/train_s1_mosaic_3bit.yaml
+```
 
 #### Stage 2 - Latent Space Enhancement - Adversarial Training with Diffusion Initialization:
 
-> python3 train_sd2GAN.py --config configs/train/train_sd2gan.yaml
+```bash
+python3 train_sd2GAN.py --config configs/train/train_sd2gan.yaml   
+```   
 
 #### Stage 3 - Burst Processing - Fidelity Upgrade
 
@@ -69,23 +78,39 @@ TODO
 
 Key insight: Second channel of the encoded latents have the most semantic information which enables flow warping to the center channel for burst refinement. However 4x upscaling is still required to compute flow.
 
-> CUDA_VISIBLE_DEVICES=1 python3 train_burst.py --config configs/train/train_burst.yaml (for comparison with QUIVER & QBP)
-> CUDA_VISIBLE_DEVICES=1 python3 train_burst.py --config configs/train/train_burst_mosaic.yaml (color-burst model)
+For comparison with QUIVER & QBP:  
+```bash
+CUDA_VISIBLE_DEVICES=1 python3 train_burst.py --config configs/train/train_burst.yaml  
+```
 
+For color-burst model:
+```bash
+CUDA_VISIBLE_DEVICES=1 python3 train_burst.py --config configs/train/train_burst_mosaic.yaml 
+```
 
 **Precomputing latents:**
 
-> conda activate hypir && cd apgi/gQVR
-> python3 infer_sd2GAN_stage2.py --config configs/inference/eval_sd2GAN.yaml --device "cuda:0" --ds_txt dataset_txt_files/video_dataset_txt_files/combined_part00.txt
+```bash
+conda activate hypir && cd apgi/gQVR   
+
+python3 infer_sd2GAN_stage2.py --config configs/inference/eval_sd2GAN.yaml --device "cuda:0" --ds_txt dataset_txt_files/video_dataset_txt_files/combined_part00.txt
+```
 
 **1. Training Latent Space 3D Stabilizer:**
 
-> conda activate hypir && cd apgi/gQVR
-> accelerate launch train_3Dtemp_stabilization.py --config configs/train/train_sd2gan_video.yaml
+```bash
+conda activate hypir && cd apgi/gQVR   
+
+accelerate launch train_3Dtemp_stabilization.py --config configs/train/train_sd2gan_video.yaml
+```
 
 **2. Training ConvEMA Decoder:**
-> conda activate hypir && cd apgi/gQVR
-> accelerate launch train_convEMADecoder.py --config configs/train/train_convEMA_decoder_stage3.yaml
+
+```bash
+conda activate hypir && cd apgi/gQVR    
+
+accelerate launch train_convEMADecoder.py --config configs/train/train_convEMA_decoder_stage3.yaml
+```
 
 ---
 
@@ -104,9 +129,6 @@ Please cite our work if you find it useful. Thanks! :)
     year      = {2026},
 }
 ```
-
-## License 
-
 
 ## <a id="acknowledgements"></a>Acknowledgements
 
