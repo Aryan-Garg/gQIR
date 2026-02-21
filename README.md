@@ -1,5 +1,8 @@
-# Generative QVR
-<!-- Teaser Image/Video -->
+# [CVPR 2026] gQIR: Generative Quanta Image Reconstruction
+
+<!-- TODO: Teaser Image/Video -->
+![color_spads](assets/README_teaser_color_SPAD.png)
+
 ![Static Badge](https://img.shields.io/badge/🐧-project_page-green?link=https%3A%2F%2Faryan-garg.github.io%2Fgqvr)
 [![arXiv](https://img.shields.io/badge/arXiv-TO.REPLACE-b31b1b.svg)](https://arxiv.org/abs/TO.REPLACE) [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow)](https://huggingface.co/spaces/AryanGarg/TODO) ![visitors](https://visitor-badge.laobi.icu/badge?page_id=Aryan-Garg/gQVR)
 
@@ -22,11 +25,19 @@
 
 ## <a id="results"></a>Results 
 
+TODO
+
 ## <a id="installation"></a>Installation
+
+TODO
 
 ## <a id="quick_start"></a>Quick Start
 
+TODO
+
 ## <a id="pretrained_models_and_dataset"></a>Pretrained Models and Dataset
+
+TODO
 
 ## <a id="inference"></a>Inference 
 
@@ -52,7 +63,7 @@
 
 > python3 train_sd2GAN.py --config configs/train/train_sd2gan.yaml
 
-#### Stage 3
+#### Stage 3 - Burst Processing - Fidelity Upgrade
 
 ![latent_visualization](assets/latent_viz.png)
 
@@ -61,9 +72,6 @@ Key insight: Second channel of the encoded latents have the most semantic inform
 > CUDA_VISIBLE_DEVICES=1 python3 train_burst.py --config configs/train/train_burst.yaml (for comparison with QUIVER & QBP)
 > CUDA_VISIBLE_DEVICES=1 python3 train_burst.py --config configs/train/train_burst_mosaic.yaml (color-burst model)
 
-#### Stage 4 - Image Prior Lifting to Video Stabilization Model
-
-Under construction
 
 **Precomputing latents:**
 
@@ -83,12 +91,6 @@ Under construction
 
 Currently the brightness scale/factor (proportional to PPP) is set to 1.0 for all simulations
 
-## Stage 1: Training the Frame Denoiser/Degradation-Aware Encoder
-
-### Stage 2: Finetuning the Generative Pipeline with it
-
-### Stage 3: Conversion to a Video Handling Prior
-
 
 ## <a id="citation"></a>Citation
 Please cite us if our work is useful for your research.
@@ -96,10 +98,10 @@ Please cite us if our work is useful for your research.
 <!-- TODO: Replace with conference bibtex after publication -->
 
 ```bibtex
-@misc{garg2025_gqvr
-    title={gQVR: Generative Quanta Video Restoration},
-    author={Aryan Garg and Sizhuo Ma and Mohit Gupta},
-    year={2025},
+@misc{garg2026_gqvr
+    title={gQVR: Generative Quanta Image Reconstruction},
+    author={Garg, Aryan and Ma, Sizhuo and  Gupta, Mohit},
+    year={2026},
     eprint={},
     archivePrefix={arXiv},
     primaryClass={cs.CV}
