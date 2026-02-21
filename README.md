@@ -54,15 +54,19 @@ python3 infer_sd2GAN_stage2.py --config configs/inference/eval_3bit_color.yaml -
 ## <a id="training"></a>Training
 <!-- Arch Image -->
 
-#### Stage 1 - SPAD-CMOS Aligned VAE:
+#### Stage 1 - Training SPAD-CMOS Aligned VAE:
 
 ```bash
 conda activate hypir   
+```
 
-accelerate launch train_daEncoder.py --config configs/train/train_daEncoder.yaml
-
+1-bit qVAE:
+```bash
 CUDA_VISIBLE_DEVICES=8,9,10,11,12,13,14,15 accelerate launch --main_process_port 29502 train_s1_mosaic.py --config configs/train/train_s1_mosaic_1bit.yaml
+```
 
+3-bit qVAE:
+```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --main_process_port 29503 train_s1_mosaic.py --config configs/train/train_s1_mosaic_3bit.yaml
 ```
 
