@@ -26,18 +26,19 @@
 
 ## <a id="installation"></a>Installation
 
+Recommended Hardware: NVIDIA RTX 4090 (CUDA version: 12.5)
+
 ```bash
 conda env create -f environment.yml
 ```
 
 #### RAFT setup:
-TODO:
-
 ```bash
-
+sh download_raft_weights.sh
 ```
 
-**NOTE:** Hardware: NVIDIA RTX 4090 (CUDA version: 12.5)
+Make sure `./pretrained_ckpts/models/raft-things.pth` is a valid path & properly downloaded RAFT weight. (This is used in all burst pipelines. See L257 of infer_burst.py)
+
 
 ## <a id="quick_start"></a>Quick Start
 
@@ -168,7 +169,25 @@ Additionally, the entire project was supported by [Ubicept](https://www.ubicept.
 
 ## <a name="contact"></a>Contact
 
-If you have any questions, please feel free to contact me at [agarg54@wisc.edu](mailto:agarg54@wisc.edu).
+If you have any questions, please feel free to contact me at [agarg54@wisc.edu](mailto:agarg54@wisc.edu) or raise an issue here.
 
 
-## <a id="FAQs"></a>FAQs:
+## <a id="FAQs"></a>FAQs
+
+1. What is the minmum average PPP where gQIR works?
+
+> 1PPP average was tested. It might work below that limit as well. Contrast correction is needed. Note: Training PPP was fixed at 3.25PPP (alpha = 1.0).
+
+2. Can I increase the input size/temporal window for Stage 3?
+
+> Due to VRAM limitations we could only train with 11 3-bit block sums. With more VRAM, scaling is possible. A smarter block-summing strategy could potentially provide gains.
+
+3. Can you quantify or control hallucination?
+
+> gQIR has no such mechanism as of yet.
+
+4. Can I use prompts to guide the reconstruction since the base prior is a T2I model (SD2.1)?
+
+> Absolutely yes! 
+![Cool-Prompt-Reconstruction](assets/prompt_cool_feature.png)
+
