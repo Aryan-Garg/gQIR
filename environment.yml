@@ -1,4 +1,4 @@
-name: sd35
+name: gqir
 channels:
   - defaults
   - conda-forge
@@ -234,4 +234,3 @@ dependencies:
       - yarl==1.20.1
       - zipp==3.23.0
       - zstandard==0.25.0
-prefix: /nobackup/aryan/.conda/envs/sd35
