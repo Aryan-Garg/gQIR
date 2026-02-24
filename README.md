@@ -8,12 +8,11 @@
 
 [Aryan Garg](https://aryan-garg.github.io/)<sup>1</sup>, [Sizhuo Ma](https://sizhuoma.netlify.app/)<sup>2</sup>, [Mohit Gupta](https://wisionlab.com/people/mohit-gupta/)<sup>1</sup>,
 
-<sup>1</sup> University of Wisconsin-Madison<br><sup>2</sup> SnapChat, USA<br>
+<sup>1</sup> University of Wisconsin-Madison<br><sup>2</sup> Snap, Inc<br>
 
 
 ## Table of Contents
 
-- [Results](#results)
 - [Installation](#installation)
 - [Quick Start](#quick_start)
 - [Pretrained Models and Dataset](#pretrained_models_and_dataset)
@@ -22,37 +21,67 @@
 - [Citation](#citation)
 - [Acknowledgements](#acknowledgements)
 - [Contact](#contact)
+- [FAQs](#faqs)
 
-## <a id="results"></a>Results 
-
-TODO
 
 ## <a id="installation"></a>Installation
 
-TODO
+```bash
+conda env create -f environment.yml
+```
+
+#### RAFT setup:
+TODO:
+
+```bash
+
+```
+
+**NOTE:** Hardware: NVIDIA RTX 4090 (CUDA version: 12.5)
 
 ## <a id="quick_start"></a>Quick Start
 
+**Launching the local gradio demo:** 
 TODO
 
 ## <a id="pretrained_models_and_dataset"></a>Pretrained Models and Dataset
 
+### Model Zoo:
+TODO
+
+### XD-Dataset:
+TODO
+
+### Datasets used:
 TODO
 
 ## <a id="inference"></a>Inference 
 
+### Stage 1 & 2 - Single Image Reconstruction:
+
+For Stage 1, simply add the `--only_vae` flag at the end of any of the shown below example commands.
+
+#### Example for Single Image with GT:
 ```bash
-python3 infer_sd2GAN_stage2.py --config configs/inference/eval_sd2GAN.yaml 
+python3 infer_sd2GAN_stage2.py --config configs/inference/eval_3bit_color.yaml --eval_single_image --single_img_path "<path-to-dataset>/DIV2K_valid_HR/0829.png"
+```
+
+#### Example for running directly on a GT Dir:
+```bash
+python3 infer_sd2GAN_stage2.py --config configs/inference/eval_3bit_mono.yaml --eval_gt_dir --gt_dir <path-to-gt-dir> 
 ```
 
 #### For real world captures:
-
 ```bash
 python3 infer_sd2GAN_stage2.py --config configs/inference/eval_3bit_color.yaml --ds_txt ds_txt_real_captures.txt --real_captures
 ```
 
+### Stage 3 - Burst Reconstruction:
+TODO
+
+
 ## <a id="training"></a>Training
-<!-- Arch Image -->
+<!-- DONE -->
 
 #### Stage 1 - Training SPAD-CMOS Aligned VAE:
 
@@ -80,7 +109,7 @@ python3 train_sd2GAN.py --config configs/train/train_sd2gan.yaml
 
 ![latent_visualization](assets/latent_viz.png)
 
-Key insight: Second channel of the encoded latents have the most semantic information which enables flow warping to the center channel for burst refinement. However 4x upscaling is still required to compute flow.
+<!-- Key insight: Second channel of the encoded latents have the most semantic information which enables flow warping to the center channel for burst refinement. However 4x upscaling is still required to compute flow. -->
 
 For comparison with QUIVER & QBP:  
 ```bash
@@ -99,7 +128,7 @@ conda activate hypir && cd apgi/gQVR
 
 python3 infer_sd2GAN_stage2.py --config configs/inference/eval_sd2GAN.yaml --device "cuda:0" --ds_txt dataset_txt_files/video_dataset_txt_files/combined_part00.txt
 ```
-
+<!-- 
 **1. Training Latent Space 3D Stabilizer:**
 
 ```bash
@@ -114,11 +143,9 @@ accelerate launch train_3Dtemp_stabilization.py --config configs/train/train_sd2
 conda activate hypir && cd apgi/gQVR    
 
 accelerate launch train_convEMADecoder.py --config configs/train/train_convEMA_decoder_stage3.yaml
-```
+``` -->
 
 ---
-
-Currently the brightness scale/factor (proportional to PPP) is set to 1.0 for all simulations
 
 
 ## <a id="Cite"></a>Citation
@@ -135,9 +162,13 @@ Please cite our work if you find it useful. Thanks! :)
 ```
 
 ## <a id="acknowledgements"></a>Acknowledgements
-
 This project is based on [XPixelGroup](https://xpixel.group/)'s projects: [DiffBIR](https://github.com/XPixelGroup/DiffBIR) and [HYPIR](https://github.com/XPixelGroup/HYPIR). Thanks for their amazing work.
+
+Additionally, the entire project was supported by [Ubicept](https://www.ubicept.com) for compute (cloud credits).
 
 ## <a name="contact"></a>Contact
 
-If you have any questions, please feel free to contact with me at [agarg54@wisc.edu](mailto:agarg54@wisc.edu).
+If you have any questions, please feel free to contact me at [agarg54@wisc.edu](mailto:agarg54@wisc.edu).
+
+
+## <a id="FAQs"></a>FAQs:
