@@ -59,7 +59,6 @@ Testing/Validation: 990 (xvfi) + 6327 (i22k)= 7317
 
 Used for last stage fine-tuning of the video model. Wild card fps. High resolution.
 
-<!-- TODO: Find N -->
 Each video is atleast 10 seconds/ > 200-frames.
 
 Very interesting deformable physics scenes - explosions, shattering objects, bullets, fluids etc.
@@ -84,19 +83,18 @@ Credits:
 
 ---
 
-TODO:
 ### Dataset Statistics so far (Not including xd-scraped):
 
 Total frames: 1,424,188 -> 2.7M
-Videos: 5098 -> 42k
+Videos: 42k
 
 Training: 1,424,188 - 7317
 Testing/Validation: 990 (xvfi) + 6327 (i22k) = 7317
 
 ---
 
-TODO:
-## Video Model Training Progression
+
+## Future Step: Video Model Training Progression
 
 | Stage |            Dataset           |  FPS      | Purpose |
 |-----  |----------------------------  |:----:     |-------  |
