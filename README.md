@@ -1,12 +1,11 @@
 # [CVPR 2026] gQIR: Generative Quanta Image Reconstruction
 
-<!-- TODO: Teaser Image/Video -->
 ![color_spads](assets/README_teaser_color_SPAD.png)
 
-![Static Badge](https://img.shields.io/badge/🐧-project_page-green?link=https%3A%2F%2Faryan-garg.github.io%2Fgqvr)
+![Static Badge](https://img.shields.io/badge/🐧-project_page-green?link=https%3A%2F%2Faryan-garg.github.io%2Fgqir)
 [![arXiv](https://img.shields.io/badge/arXiv-2602.20417-b31b1b.svg)](https://arxiv.org/abs/2602.20417) [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow)](https://huggingface.co/spaces/AryanGarg/TODO) ![visitors](https://visitor-badge.laobi.icu/badge?page_id=Aryan-Garg/gQVR)
 
-[Aryan Garg](https://aryan-garg.github.io/)<sup>1</sup>, [Sizhuo Ma](https://sizhuoma.netlify.app/)<sup>2</sup>, [Mohit Gupta](https://wisionlab.com/people/mohit-gupta/)<sup>1</sup>,
+[Aryan Garg](https://aryan-garg.github.io/)<sup>1</sup>, [Sizhuo Ma](https://sizhuoma.netlify.app/)<sup>2</sup>, [Mohit Gupta](https://wisionlab.com/people/mohit-gupta/)<sup>1</sup>
 
 <sup>1</sup> University of Wisconsin-Madison<br><sup>2</sup> Snap, Inc<br>
 
