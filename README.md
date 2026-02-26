@@ -60,8 +60,13 @@ See full Model card at HuggingFaces 🤗: [aRy4n/gQIR](https://huggingface.co/aR
 | Adversarial Diffusion LoRA-UNet | Stage 2 |  3-bit | [state_dict.pth](https://huggingface.co/aRy4n/gQIR/resolve/main/state_dict.pth) |
 | FusionViT | Stage 3 |  3-bit | [fusion_vit_0050000.pt](https://huggingface.co/aRy4n/gQIR/resolve/main/fusion_vit_0050000.pt) |
 
-### XD-Dataset (Testing Only):
+### XD-Dataset:
 The 390 videos large XD dataset and it's description can be found at HuggingFaces 🤗: [aRy4n/eXtreme-Deformable](https://huggingface.co/datasets/aRy4n/eXtreme-Deformable).
+
+### Real Color-SPAD Dataset:
+The real color SPAD captures can be found at  HuggingFaces 🤗: [aRy4n/real-color-SPAD-indoor6](https://huggingface.co/datasets/aRy4n/real-color-SPAD-indoor6).
+
+*Careful while downloading! The dataset is ~83Gb big.*
 
 ### Other Datasets used for training/testing:
 
@@ -69,7 +74,7 @@ The 390 videos large XD dataset and it's description can be found at HuggingFace
 1. DIV2K
 2. FFHQ (for enhancing facial reconstruction)
 3. Flickr2K
-4. LAION-170M HQ (smaller subset still) 
+4. LAION-170M HQ (smaller subset used still) 
 5. Landscapes HQ
 
 **Video-datasets (for all 3 stages):**
