@@ -48,17 +48,46 @@ TODO
 ## <a id="pretrained_models_and_dataset"></a>Pretrained Models and Dataset
 
 ### Model Zoo:
-TODO
 
-### XD-Dataset:
-TODO
+See full Model card at HuggingFaces 🤗: [aRy4n/gQIR](https://huggingface.co/aRy4n/gQIR)
 
-### Datasets used:
-TODO
+
+| Color-Model Name | Stage | Bit Depth | Download Link |
+|:---|:---:|:---:|:---|
+| qVAE | Stage 1 | 1-bit | [1965000.pt](https://huggingface.co/aRy4n/gQIR/resolve/main/1-bit/1965000.pt) |
+| Adversarial Diffusion LoRA-UNet  | Stage 2 | 1-bit | [state_dict.pth](https://huggingface.co/aRy4n/gQIR/resolve/main/1-bit/state_dict.pth) |
+| qVAE | Stage 1 | 3-bit | [0105000.pt](https://huggingface.co/aRy4n/gQIR/resolve/main/0105000.pt) |
+| Adversarial Diffusion LoRA-UNet | Stage 2 |  3-bit | [state_dict.pth](https://huggingface.co/aRy4n/gQIR/resolve/main/state_dict.pth) |
+| FusionViT | Stage 3 |  3-bit | [fusion_vit_0050000.pt](https://huggingface.co/aRy4n/gQIR/resolve/main/fusion_vit_0050000.pt) |
+
+### XD-Dataset (Testing Only):
+The 390 videos large XD dataset and it's description can be found at HuggingFaces 🤗: [aRy4n/eXtreme-Deformable](https://huggingface.co/datasets/aRy4n/eXtreme-Deformable).
+
+### Other Datasets used for training/testing:
+
+**Image-datasets (for stages 1 & 2 only)**
+1. DIV2K
+2. FFHQ (for enhancing facial reconstruction)
+3. Flickr2K
+4. LAION-170M HQ (smaller subset still) 
+5. Landscapes HQ
+
+**Video-datasets (for all 3 stages):**
+1. [Visionsim](https://github.com/WISION-Lab/visionsim). *Jungerman et al*. Download dataset from the Single Photon Challenge [Download-Page](https://singlephotonchallenge.com/download)
+2. I2-2000fps. From the papers: [QUIVER](https://chennuriprateek.github.io/Quanta_Video_Restoration-QUIVER-/) & [QuDI](https://arxiv.org/abs/2506.06945).
+3. XVFI (4096×2160 cropped to 768x768. Each video capped at 5,000 frames/5 seconds)
+5. UDM10 - 10 videos @24fps (Testing only)
+6. SPMC Videos - 30 videos @24fps (Testing only)
+7. REDS - 240 videos @120fps
+8. YouHQ
+9. XD (Testing only)
+
 
 ## <a id="inference"></a>Inference 
 
 ### Stage 1 & 2 - Single Image Reconstruction:
+
+⚠️ Please update input dataset/image paths in the respective config files first!
 
 For Stage 1, simply add the `--only_vae` flag at the end of any of the shown below example commands.
 
