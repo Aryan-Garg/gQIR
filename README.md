@@ -1,6 +1,7 @@
 # [CVPR 2026] gQIR: Generative Quanta Image Reconstruction
 
-![color_spads](assets/README_teaser_color_SPAD_whitebg.png){width=75%}
+<img src="assets/README_teaser_color_SPAD_whitebg.png" width="300" alt="ColorSPADs">
+
 
 ![Static Badge](https://img.shields.io/badge/🐧-project_page-green?link=https%3A%2F%2Faryan-garg.github.io%2Fgqir)
 [![arXiv](https://img.shields.io/badge/arXiv-2602.20417-b31b1b.svg)](https://arxiv.org/abs/2602.20417) [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow)](https://huggingface.co/spaces/AryanGarg/TODO) ![visitors](https://visitor-badge.laobi.icu/badge?page_id=Aryan-Garg/gQVR)
