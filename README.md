@@ -87,7 +87,7 @@ The 390 videos large XD dataset and it's description can be found at HuggingFace
 
 ### Stage 1 & 2 - Single Image Reconstruction:
 
-⚠️ Please update input dataset/image paths in the respective config files first!
+⚠️ **Update input dataset/image paths in the respective *config* files first! See `test_txt_files` for examples on how to create dataset txt files.**
 
 For Stage 1, simply add the `--only_vae` flag at the end of any of the shown below example commands.
 
@@ -107,7 +107,16 @@ python3 infer_sd2GAN_stage2.py --config configs/inference/eval_3bit_color.yaml -
 ```
 
 ### Stage 3 - Burst Reconstruction:
-TODO
+
+For realistic (77 GT frames --> 77 binary frames) burst eval:
+```bash
+python3 infer_burst_realistic.py --config configs/inference/eval_burst_mosaic.yaml
+```
+
+For QUIVER-style (11 GT frames --> 77 binary frames) burst eval:
+```bash
+python3 infer_burst.py --config configs/inference/eval_burst_mosaic.yaml
+```
 
 
 ## <a id="training"></a>Training
@@ -193,7 +202,7 @@ Please cite our work if you find it useful. Thanks! :)
 ## <a id="acknowledgements"></a>Acknowledgements
 This project is based on [XPixelGroup](https://xpixel.group/)'s projects: [DiffBIR](https://github.com/XPixelGroup/DiffBIR) and [HYPIR](https://github.com/XPixelGroup/HYPIR). Thanks for their amazing work.
 
-Additionally, the entire project was supported by [Ubicept](https://www.ubicept.com) for compute (cloud credits).
+Additionally, the project was supported by [Ubicept](https://www.ubicept.com) for compute (cloud credits).
 
 ## <a name="contact"></a>Contact
 
