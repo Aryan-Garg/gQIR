@@ -69,6 +69,8 @@ The real color SPAD captures can be found at  HuggingFaces 🤗: [aRy4n/real-col
 
 *Careful while downloading! The dataset is ~83Gb big.*
 
+Special thanks to [Avery Gump](https://wisionlab.com/people/avery-gump/) for helping capture this dataset.
+
 ### Other Datasets used for training/testing:
 
 **Image-datasets (for stages 1 & 2 only)**
