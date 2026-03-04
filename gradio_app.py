@@ -8,7 +8,7 @@ Local run cmd:
 python gradio_app.py 
   --single-config configs/inference/eval_sd2GAN.yaml \
   --burst-config configs/inference/eval_burst_mosaic.yaml \
-  --device cuda
+  --device cuda --local
 """
 
 from __future__ import annotations
@@ -51,10 +51,16 @@ except Exception:
 
 
 APP_ROOT = Path(__file__).resolve().parent
-DEFAULT_SINGLE_CONFIG = APP_ROOT / "configs" / "inference" / "eval_sd2GAN.yaml"
-DEFAULT_BURST_CONFIG = APP_ROOT / "configs" / "inference" / "eval_burst_mosaic.yaml"
+DEFAULT_SINGLE_CONFIG_COLOR = APP_ROOT / "configs" / "inference" / "eval_3bit_color.yaml"
+DEFAULT_SINGLE_CONFIG_MONO = APP_ROOT / "configs" / "inference" / "eval_3bit_mono.yaml"
+DEFAULT_BURST_CONFIG_COLOR = APP_ROOT / "configs" / "inference" / "eval_burst_mosaic.yaml"
+DEFAULT_BURST_CONFIG_MONO = APP_ROOT / "configs" / "inference" / "eval_burst.yaml"
 DEFAULT_MAX_SIZE = (512, 512)
 BURST_WINDOW = 77
+
+PIPELINE_COLOR = "Color"
+PIPELINE_MONO = "Monochrome"
+PIPELINE_OPTIONS = [PIPELINE_COLOR, PIPELINE_MONO]
 
 SINGLE_MODE_GT = "GT image (simulate 3-bit SPAD)"
 SINGLE_MODE_REAL = "Real SPAD frame"
@@ -63,15 +69,15 @@ BURST_MODE_REAL = "Real photon cube / SPAD cube"
 
 TO_TENSOR = transforms.ToTensor()
 
-_SINGLE_PIPELINE: Optional["SingleColorPipeline"] = None
-_BURST_PIPELINE: Optional["BurstColorPipeline"] = None
+_SINGLE_PIPELINES: dict[str, "SingleColorPipeline"] = {}
+_BURST_PIPELINES: dict[str, "BurstColorPipeline"] = {}
 _SINGLE_LOCK = threading.Lock()
 _BURST_LOCK = threading.Lock()
 
-RUNTIME_SINGLE_CONFIG: Optional[Path] = None
-RUNTIME_BURST_CONFIG: Optional[Path] = None
+RUNTIME_SINGLE_CONFIGS: dict[str, Path] = {}
+RUNTIME_BURST_CONFIGS: dict[str, Path] = {}
 RUNTIME_DEVICE: str = "cpu"
-RUNTIME_BURST_OUT_SIZE: int = DEFAULT_MAX_SIZE[0]
+RUNTIME_BURST_OUT_SIZES: dict[str, int] = {}
 _TEMP_VIDEO_DIRS: list[str] = []
 
 
@@ -102,8 +108,22 @@ class CubeDescriptor:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--single-config", type=str, default=str(DEFAULT_SINGLE_CONFIG))
-    parser.add_argument("--burst-config", type=str, default=str(DEFAULT_BURST_CONFIG))
+    parser.add_argument(
+        "--single-config",
+        type=str,
+        default=None,
+        help="Deprecated alias for --single-config-color",
+    )
+    parser.add_argument(
+        "--burst-config",
+        type=str,
+        default=None,
+        help="Deprecated alias for --burst-config-color",
+    )
+    parser.add_argument("--single-config-color", type=str, default=str(DEFAULT_SINGLE_CONFIG_COLOR))
+    parser.add_argument("--single-config-mono", type=str, default=str(DEFAULT_SINGLE_CONFIG_MONO))
+    parser.add_argument("--burst-config-color", type=str, default=str(DEFAULT_BURST_CONFIG_COLOR))
+    parser.add_argument("--burst-config-mono", type=str, default=str(DEFAULT_BURST_CONFIG_MONO))
     parser.add_argument(
         "--device",
         type=str,
@@ -151,22 +171,71 @@ def _to_uint8(arr_float01: np.ndarray) -> np.ndarray:
     return np.clip(arr_float01 * 255.0, 0.0, 255.0).astype(np.uint8)
 
 
-def _resize_frame_rgb(frame_float01: np.ndarray, out_size: int) -> np.ndarray:
+def _resize_dims_keep_aspect(h: int, w: int, max_side: int, multiple_of: int = 1) -> tuple[int, int]:
+    if h <= 0 or w <= 0:
+        raise ValueError(f"Invalid frame size: {h}x{w}")
+    scale = float(max_side) / float(max(h, w))
+    new_h = max(1, int(round(h * scale)))
+    new_w = max(1, int(round(w * scale)))
+
+    if multiple_of > 1:
+        new_h = max(multiple_of, int(round(new_h / multiple_of) * multiple_of))
+        new_w = max(multiple_of, int(round(new_w / multiple_of) * multiple_of))
+    new_h = min(new_h, max_side)
+    new_w = min(new_w, max_side)
+    return new_h, new_w
+
+
+def _resize_frame_rgb(frame_float01: np.ndarray, max_side: int, multiple_of: int = 1) -> np.ndarray:
     frame_float01 = _normalize_float01(_ensure_rgb_image(frame_float01))
-    if frame_float01.shape[0] == out_size and frame_float01.shape[1] == out_size:
+    h, w = frame_float01.shape[:2]
+    new_h, new_w = _resize_dims_keep_aspect(h, w, max_side=max_side, multiple_of=multiple_of)
+    if h == new_h and w == new_w:
         return frame_float01
     pil_img = Image.fromarray(_to_uint8(frame_float01))
-    return np.asarray(pil_img.resize((out_size, out_size), Image.LANCZOS), dtype=np.float32) / 255.0
+    return np.asarray(pil_img.resize((new_w, new_h), Image.LANCZOS), dtype=np.float32) / 255.0
 
 
-def _resize_frames_rgb(frames_thwc: np.ndarray, out_size: int) -> np.ndarray:
+def _resize_frames_rgb(frames_thwc: np.ndarray, max_side: int, multiple_of: int = 1) -> np.ndarray:
     frames_thwc = np.asarray(frames_thwc)
     if frames_thwc.ndim != 4 or frames_thwc.shape[-1] != 3:
         raise ValueError(f"Expected THWC with C=3, got {frames_thwc.shape}")
-    if frames_thwc.shape[1] == out_size and frames_thwc.shape[2] == out_size:
+
+    h, w = frames_thwc.shape[1:3]
+    new_h, new_w = _resize_dims_keep_aspect(h, w, max_side=max_side, multiple_of=multiple_of)
+    if h == new_h and w == new_w:
         return _normalize_float01(frames_thwc)
-    resized = [_resize_frame_rgb(frames_thwc[i], out_size) for i in range(frames_thwc.shape[0])]
+
+    resized = [
+        _resize_frame_rgb(frames_thwc[i], max_side=max_side, multiple_of=multiple_of)
+        for i in range(frames_thwc.shape[0])
+    ]
     return np.stack(resized, axis=0).astype(np.float32)
+
+
+def _to_gray_uint8(img_uint8_rgb: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    if img_uint8_rgb is None:
+        return None
+    arr = np.asarray(img_uint8_rgb)
+    if arr.ndim == 2:
+        return arr.astype(np.uint8)
+    if arr.ndim == 3 and arr.shape[-1] == 1:
+        return arr[..., 0].astype(np.uint8)
+    return np.asarray(Image.fromarray(arr.astype(np.uint8)).convert("L"), dtype=np.uint8)
+
+
+def _resize_uint8_to_hw(img_uint8: Optional[np.ndarray], target_h: int, target_w: int) -> Optional[np.ndarray]:
+    if img_uint8 is None:
+        return None
+    arr = np.asarray(img_uint8)
+    if arr.ndim == 2:
+        pil = Image.fromarray(arr.astype(np.uint8), mode="L")
+        return np.asarray(pil.resize((target_w, target_h), Image.LANCZOS), dtype=np.uint8)
+    if arr.ndim == 3 and arr.shape[-1] == 1:
+        pil = Image.fromarray(arr[..., 0].astype(np.uint8), mode="L")
+        return np.asarray(pil.resize((target_w, target_h), Image.LANCZOS), dtype=np.uint8)
+    pil = Image.fromarray(arr.astype(np.uint8), mode="RGB")
+    return np.asarray(pil.resize((target_w, target_h), Image.LANCZOS), dtype=np.uint8)
 
 
 def _to_thwc(arr: np.ndarray) -> np.ndarray:
@@ -256,10 +325,26 @@ def _simulate_single_3bit_from_gt(gt_rgb_float01: np.ndarray, target_ppp: float)
     return np.clip(lq_sum / float(n), 0.0, 1.0)
 
 
+def _simulate_single_3bit_from_gt_mono(gt_rgb_float01: np.ndarray, target_ppp: float) -> np.ndarray:
+    bits = 3
+    n = (2**bits) - 1
+    factor = target_ppp / 3.5
+    lq_sum = np.zeros_like(gt_rgb_float01, dtype=np.float32)
+    for _ in range(n):
+        spc = emulate_spc(srgb_to_linearrgb(gt_rgb_float01), factor=factor).astype(np.float32)
+        lq_sum += spc
+    return np.clip(lq_sum / float(n), 0.0, 1.0)
+
+
 def _simulate_binary_burst_frame_from_gt(gt_rgb_float01: np.ndarray) -> np.ndarray:
     # Matches spc_video_streaming.py defaults for color burst simulation.
     spc = emulate_spc(srgb_to_linearrgb(gt_rgb_float01), factor=1.0).astype(np.float32)
     return _mosaic_with_pattern(spc, "BGGR")
+
+
+def _simulate_binary_burst_frame_from_gt_mono(gt_rgb_float01: np.ndarray) -> np.ndarray:
+    # Matches spc_video_streaming.py when mosaic=False.
+    return emulate_spc(srgb_to_linearrgb(gt_rgb_float01), factor=1.0).astype(np.float32)
 
 
 def _tensor_to_uint8_image(x_bchw: torch.Tensor) -> np.ndarray:
@@ -349,10 +434,14 @@ class SingleColorPipeline:
         target_ppp: float,
         only_vae_output: bool,
         seed: int,
+        simulate_color_mosaic: bool = True,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
         gt_rgb = _normalize_float01(_ensure_rgb_image(gt_image_np))
-        gt_rgb = _resize_frame_rgb(gt_rgb, self.max_size[0])
-        lq_rgb = _simulate_single_3bit_from_gt(gt_rgb, target_ppp=target_ppp)
+        gt_rgb = _resize_frame_rgb(gt_rgb, self.max_size[0], multiple_of=8)
+        if simulate_color_mosaic:
+            lq_rgb = _simulate_single_3bit_from_gt(gt_rgb, target_ppp=target_ppp)
+        else:
+            lq_rgb = _simulate_single_3bit_from_gt_mono(gt_rgb, target_ppp=target_ppp)
         recon_uint8, used_seed = self._enhance(lq_rgb, prompt, only_vae_output, seed)
         status = f"Single reconstruction complete (mode=GT simulation, seed={used_seed}, PPP={target_ppp:.2f})."
         return _to_uint8(gt_rgb), _to_uint8(lq_rgb), recon_uint8, status
@@ -365,7 +454,7 @@ class SingleColorPipeline:
         seed: int,
     ) -> tuple[np.ndarray, np.ndarray, str]:
         lq_rgb = _normalize_float01(_ensure_rgb_image(lq_image_np))
-        lq_rgb = _resize_frame_rgb(lq_rgb, self.max_size[0])
+        lq_rgb = _resize_frame_rgb(lq_rgb, self.max_size[0], multiple_of=8)
         recon_uint8, used_seed = self._enhance(lq_rgb, prompt, only_vae_output, seed)
         status = f"Single reconstruction complete (mode=real SPAD frame, seed={used_seed})."
         return _to_uint8(lq_rgb), recon_uint8, status
@@ -491,7 +580,11 @@ class BurstColorPipeline:
         if binary_window_77.shape[0] != BURST_WINDOW:
             raise ValueError(f"Burst window must have {BURST_WINDOW} frames, got {binary_window_77.shape[0]}")
 
-        binary_window_77 = _resize_frames_rgb(_normalize_float01(binary_window_77), self.out_size)
+        binary_window_77 = _resize_frames_rgb(
+            _normalize_float01(binary_window_77),
+            max_side=self.out_size,
+            multiple_of=64,
+        )
 
         lqs = torch.from_numpy(binary_window_77).unsqueeze(0).permute(0, 1, 4, 2, 3).to(self.device)
         lqs = (lqs * 2.0) - 1.0
@@ -506,7 +599,11 @@ class BurstColorPipeline:
 
         gts = None
         if gt_window_77 is not None:
-            gt_window_77 = _resize_frames_rgb(_normalize_float01(gt_window_77), self.out_size)
+            gt_window_77 = _resize_frames_rgb(
+                _normalize_float01(gt_window_77),
+                max_side=self.out_size,
+                multiple_of=64,
+            )
             gts = torch.from_numpy(gt_window_77).unsqueeze(0).permute(0, 1, 4, 2, 3).to(self.device)
             gts = (gts * 2.0) - 1.0
             gts_3bit = []
@@ -539,9 +636,11 @@ class BurstColorPipeline:
                     _, flow_bw = self.raft_model(center_in, ls_in, iters=20, test_mode=True)
                 else:
                     _, flow_bw = self.raft_model(ls_in, center_in, iters=20, test_mode=True)
-                flow_bw = F.interpolate(flow_bw, size=(64, 64), mode="bilinear", align_corners=True)
-                flow_bw[:, 0] *= 64.0 / float(self.out_size)
-                flow_bw[:, 1] *= 64.0 / float(self.out_size)
+                z_h, z_w = latents[t].shape[-2:]
+                in_h, in_w = ls_in.shape[-2:]
+                flow_bw = F.interpolate(flow_bw, size=(z_h, z_w), mode="bilinear", align_corners=True)
+                flow_bw[:, 0] *= float(z_w) / float(in_w)
+                flow_bw[:, 1] *= float(z_h) / float(in_h)
                 flow_vectors.append(flow_bw)
 
             aligned_latents = []
@@ -577,28 +676,40 @@ class BurstColorPipeline:
         )
 
 
-def _get_single_pipeline() -> SingleColorPipeline:
-    global _SINGLE_PIPELINE
-    assert RUNTIME_SINGLE_CONFIG is not None
+def _get_single_pipeline(pipeline_type: str) -> SingleColorPipeline:
+    if pipeline_type not in PIPELINE_OPTIONS:
+        raise ValueError(f"Unknown pipeline type: {pipeline_type}")
+    if pipeline_type not in RUNTIME_SINGLE_CONFIGS:
+        raise RuntimeError(f"Single config not initialized for pipeline type: {pipeline_type}")
     with _SINGLE_LOCK:
-        if _SINGLE_PIPELINE is None:
-            _SINGLE_PIPELINE = SingleColorPipeline(RUNTIME_SINGLE_CONFIG, RUNTIME_DEVICE)
-            _SINGLE_PIPELINE.load()
-    return _SINGLE_PIPELINE
+        if pipeline_type not in _SINGLE_PIPELINES:
+            _SINGLE_PIPELINES[pipeline_type] = SingleColorPipeline(
+                RUNTIME_SINGLE_CONFIGS[pipeline_type],
+                RUNTIME_DEVICE,
+            )
+            _SINGLE_PIPELINES[pipeline_type].load()
+    return _SINGLE_PIPELINES[pipeline_type]
 
 
-def _get_burst_pipeline() -> BurstColorPipeline:
-    global _BURST_PIPELINE
-    assert RUNTIME_BURST_CONFIG is not None
+def _get_burst_pipeline(pipeline_type: str) -> BurstColorPipeline:
+    if pipeline_type not in PIPELINE_OPTIONS:
+        raise ValueError(f"Unknown pipeline type: {pipeline_type}")
+    if pipeline_type not in RUNTIME_BURST_CONFIGS:
+        raise RuntimeError(f"Burst config not initialized for pipeline type: {pipeline_type}")
     with _BURST_LOCK:
-        if _BURST_PIPELINE is None:
-            _BURST_PIPELINE = BurstColorPipeline(RUNTIME_BURST_CONFIG, RUNTIME_DEVICE)
-            _BURST_PIPELINE.load()
-    return _BURST_PIPELINE
+        if pipeline_type not in _BURST_PIPELINES:
+            _BURST_PIPELINES[pipeline_type] = BurstColorPipeline(
+                RUNTIME_BURST_CONFIGS[pipeline_type],
+                RUNTIME_DEVICE,
+            )
+            _BURST_PIPELINES[pipeline_type].load()
+    return _BURST_PIPELINES[pipeline_type]
 
 
-def _get_runtime_burst_out_size() -> int:
-    return int(RUNTIME_BURST_OUT_SIZE)
+def _get_runtime_burst_out_size(pipeline_type: str) -> int:
+    if pipeline_type not in RUNTIME_BURST_OUT_SIZES:
+        return DEFAULT_MAX_SIZE[0]
+    return int(RUNTIME_BURST_OUT_SIZES[pipeline_type])
 
 
 def _resolve_uploaded_path(uploaded_file: Any, local_path: str) -> Optional[str]:
@@ -776,7 +887,13 @@ def _load_h5_window(desc: CubeDescriptor, start: int, count: int) -> np.ndarray:
     return _normalize_float01(out)
 
 
-def _load_window_from_descriptor(desc: CubeDescriptor, start: int, count: int) -> np.ndarray:
+def _load_window_from_descriptor(
+    desc: CubeDescriptor,
+    start: int,
+    count: int,
+    pipeline_type: str = PIPELINE_COLOR,
+    resize_for_model: bool = True,
+) -> np.ndarray:
     if start < 0 or start + count > desc.total_frames:
         raise ValueError(
             f"Invalid start index {start}. Valid range is [0, {max(desc.total_frames - count, 0)}]."
@@ -798,7 +915,7 @@ def _load_window_from_descriptor(desc: CubeDescriptor, start: int, count: int) -
         raise ValueError(f"Unknown descriptor kind: {desc.kind}")
 
     if out.shape[-1] == 1:
-        if desc.source_mode == BURST_MODE_GT:
+        if desc.source_mode == BURST_MODE_GT or pipeline_type == PIPELINE_MONO:
             out = np.repeat(out, 3, axis=-1)
         else:
             out = _single_channel_bayer_to_sparse_rgb(out)
@@ -806,7 +923,10 @@ def _load_window_from_descriptor(desc: CubeDescriptor, start: int, count: int) -
     if out.shape[-1] != 3:
         raise ValueError(f"Expected 3 channels after conversion, got shape {out.shape}")
 
-    return _resize_frames_rgb(out, desc.out_size)
+    if not resize_for_model:
+        return _normalize_float01(out)
+
+    return _resize_frames_rgb(out, max_side=desc.out_size, multiple_of=64)
 
 
 def _build_cube_descriptor(source_mode: str, path: str, out_size: int) -> CubeDescriptor:
@@ -894,6 +1014,7 @@ def _single_inputs_visibility(mode: str):
 
 
 def run_single_reconstruction(
+    pipeline_type: str,
     mode: str,
     gt_image: Optional[np.ndarray],
     real_spad_image: Optional[np.ndarray],
@@ -903,31 +1024,46 @@ def run_single_reconstruction(
     seed: int,
 ):
     try:
-        pipeline = _get_single_pipeline()
+        pipeline = _get_single_pipeline(pipeline_type)
         prompt = (prompt or "").strip()
         seed = int(seed)
 
         if mode == SINGLE_MODE_GT:
             if gt_image is None:
                 raise ValueError("Please provide a GT image.")
+            in_h, in_w = _ensure_rgb_image(gt_image).shape[:2]
             gt_prev, lq_prev, recon, status = pipeline.reconstruct_from_gt(
                 gt_image_np=gt_image,
                 prompt=prompt,
                 target_ppp=float(target_ppp),
                 only_vae_output=bool(only_vae_output),
                 seed=seed,
+                simulate_color_mosaic=(pipeline_type == PIPELINE_COLOR),
             )
-            return gt_prev, lq_prev, recon, status
+            recon = _resize_uint8_to_hw(recon, in_h, in_w)
+            input_preview = _to_uint8(_normalize_float01(_ensure_rgb_image(gt_image)))
+            if pipeline_type == PIPELINE_MONO:
+                input_preview = _to_gray_uint8(input_preview)
+                lq_prev = _to_gray_uint8(lq_prev)
+                recon = _to_gray_uint8(recon)
+            return input_preview, recon, lq_prev, status
 
         if real_spad_image is None:
-            raise ValueError("Please provide a real color SPAD frame.")
+            raise ValueError("Please provide a real SPAD frame.")
+        in_h, in_w = _ensure_rgb_image(real_spad_image).shape[:2]
         lq_prev, recon, status = pipeline.reconstruct_from_real_spad(
             lq_image_np=real_spad_image,
             prompt=prompt,
             only_vae_output=bool(only_vae_output),
             seed=seed,
         )
-        return None, lq_prev, recon, status
+        recon = _resize_uint8_to_hw(recon, in_h, in_w)
+        input_preview = _to_uint8(_normalize_float01(_ensure_rgb_image(real_spad_image)))
+        if pipeline_type == PIPELINE_MONO:
+            input_preview = _to_gray_uint8(input_preview)
+            lq_prev = _to_gray_uint8(lq_prev)
+            recon = _to_gray_uint8(recon)
+        return input_preview, recon, lq_prev, status
 
     except Exception as exc:
         msg = f"Single reconstruction failed: {exc}"
@@ -935,13 +1071,13 @@ def run_single_reconstruction(
         return None, None, None, f"{msg}\n{tb}"
 
 
-def load_cube_for_ui(mode: str, cube_file: Any, cube_path: str):
+def load_cube_for_ui(pipeline_type: str, mode: str, cube_file: Any, cube_path: str):
     try:
         path = _resolve_uploaded_path(cube_file, cube_path)
         if not path:
             raise ValueError("Provide a cube file upload or local path.")
 
-        descriptor = _build_cube_descriptor(mode, path, out_size=_get_runtime_burst_out_size())
+        descriptor = _build_cube_descriptor(mode, path, out_size=_get_runtime_burst_out_size(pipeline_type))
         if descriptor.total_frames < BURST_WINDOW:
             raise ValueError(
                 f"Cube has {descriptor.total_frames} frames, but gQIR burst requires at least {BURST_WINDOW}."
@@ -950,15 +1086,19 @@ def load_cube_for_ui(mode: str, cube_file: Any, cube_path: str):
         max_start = descriptor.total_frames - BURST_WINDOW
         slider_update = gr.update(minimum=0, maximum=max_start, value=0, step=1, interactive=True)
 
-        preview_window = _load_window_from_descriptor(descriptor, start=0, count=1)
+        preview_window = _load_window_from_descriptor(
+            descriptor,
+            start=0,
+            count=1,
+            pipeline_type=pipeline_type,
+            resize_for_model=False,
+        )
         preview = _to_uint8(preview_window[0])
+        if pipeline_type == PIPELINE_MONO:
+            preview = _to_gray_uint8(preview)
 
-        if mode == BURST_MODE_GT:
-            center_input_preview = None
-            center_gt_preview = preview
-        else:
-            center_input_preview = preview
-            center_gt_preview = None
+        input_display_preview = preview
+        model_input_preview = None if mode == BURST_MODE_GT else preview
 
         info = (
             f"Loaded cube: {descriptor.path}\n"
@@ -967,41 +1107,71 @@ def load_cube_for_ui(mode: str, cube_file: Any, cube_path: str):
             f"Valid start index range: [0, {max_start}]\n"
             f"Window size fixed at {BURST_WINDOW}"
         )
-        return descriptor, info, slider_update, center_input_preview, center_gt_preview, "Cube loaded successfully."
+        return descriptor, info, slider_update, input_display_preview, model_input_preview, "Cube loaded successfully."
 
     except Exception as exc:
         err = f"Cube load failed: {exc}"
         return None, err, gr.update(interactive=False), None, None, err
 
 
-def run_burst_reconstruction(mode: str, descriptor: Optional[CubeDescriptor], start_idx: int):
+def run_burst_reconstruction(
+    pipeline_type: str,
+    mode: str,
+    descriptor: Optional[CubeDescriptor],
+    start_idx: int,
+):
     try:
         if descriptor is None:
             raise ValueError("Load a burst cube first.")
 
         start_idx = int(start_idx)
         gt_window = None
+        raw_window = _load_window_from_descriptor(
+            descriptor,
+            start=start_idx,
+            count=BURST_WINDOW,
+            pipeline_type=pipeline_type,
+            resize_for_model=False,
+        )
+        raw_center_h, raw_center_w = raw_window[BURST_WINDOW // 2].shape[:2]
         if mode == BURST_MODE_GT:
-            gt_window = _load_window_from_descriptor(descriptor, start=start_idx, count=BURST_WINDOW)
-            binary_window = np.stack(
-                [_simulate_binary_burst_frame_from_gt(gt_window[i]) for i in range(BURST_WINDOW)],
-                axis=0,
-            ).astype(np.float32)
+            gt_window = raw_window
+            if pipeline_type == PIPELINE_COLOR:
+                binary_window = np.stack(
+                    [_simulate_binary_burst_frame_from_gt(gt_window[i]) for i in range(BURST_WINDOW)],
+                    axis=0,
+                ).astype(np.float32)
+            else:
+                binary_window = np.stack(
+                    [_simulate_binary_burst_frame_from_gt_mono(gt_window[i]) for i in range(BURST_WINDOW)],
+                    axis=0,
+                ).astype(np.float32)
         else:
-            binary_window = _load_window_from_descriptor(descriptor, start=start_idx, count=BURST_WINDOW)
+            binary_window = raw_window
 
-        pipeline = _get_burst_pipeline()
+        pipeline = _get_burst_pipeline(pipeline_type)
         center_input, recon, center_gt = pipeline.reconstruct_from_binary_window(
             binary_window_77=binary_window,
             gt_window_77=gt_window,
         )
+        center_input = _resize_uint8_to_hw(center_input, raw_center_h, raw_center_w)
+        recon = _resize_uint8_to_hw(recon, raw_center_h, raw_center_w)
+        center_gt = _resize_uint8_to_hw(center_gt, raw_center_h, raw_center_w)
+        display_input = _to_uint8(raw_window[BURST_WINDOW // 2])
+        display_input = _resize_uint8_to_hw(display_input, raw_center_h, raw_center_w)
+        if pipeline_type == PIPELINE_MONO:
+            display_input = _to_gray_uint8(display_input)
+            center_input = _to_gray_uint8(center_input)
+            recon = _to_gray_uint8(recon)
+            center_gt = _to_gray_uint8(center_gt)
 
         status = (
             f"Burst reconstruction complete. "
+            f"Pipeline={pipeline_type}, "
             f"Input mode={'GT simulation' if mode == BURST_MODE_GT else 'real photon cube'}, "
             f"window=[{start_idx}, {start_idx + BURST_WINDOW - 1}]."
         )
-        return center_input, recon, center_gt, status
+        return display_input, recon, center_input, status
 
     except Exception as exc:
         msg = f"Burst reconstruction failed: {exc}"
@@ -1011,21 +1181,24 @@ def run_burst_reconstruction(mode: str, descriptor: Optional[CubeDescriptor], st
 
 def build_demo() -> gr.Blocks:
     markdown = """
-## gQIR: Generative Quanta Image Reconstruction (Color Pipelines)
+## gQIR: Generative Quanta Image Reconstruction
 
-- `Single Frame` tab: Stage-2 color reconstruction (`eval_sd2GAN.yaml`) from either GT image simulation or real SPAD frame.
-- `Burst` tab: Stage-3 color burst reconstruction (`eval_burst_mosaic.yaml`) from GT/real cubes with a start-index slider over fixed 77-bin-frame windows.
+- `Single Frame` tab: Stage-2 reconstruction (`eval_3bit_{color/mono}.yaml`) from either GT image simulation or real SPAD frame.
+- `Burst` tab: Stage-3 burst reconstruction (mono: `eval_burst.yaml` or color: `eval_burst_mosaic.yaml`) from GT/real cubes with a start-index slider over fixed 77-bin-frame windows.
 - GT burst input now also supports public-friendly video uploads (`.mp4`, `.mov`, `.wmv`, `.avi`, `.mkv`, `.webm`) in addition to cube formats.
-
-Note: This demo excludes monochrome pipelines to promote future Bayer SPAD ISPs
 """
 
-    with gr.Blocks(title="gQIR Color Demo") as demo:
+    with gr.Blocks(title="gQIR Demo") as demo:
         gr.Markdown(markdown)
 
         with gr.Tab("Single Frame (Stage-2)"):
             with gr.Row():
                 with gr.Column():
+                    single_pipeline_type = gr.Radio(
+                        PIPELINE_OPTIONS,
+                        value=PIPELINE_COLOR,
+                        label="Pipeline",
+                    )
                     single_mode = gr.Radio(
                         [SINGLE_MODE_GT, SINGLE_MODE_REAL],
                         value=SINGLE_MODE_GT,
@@ -1046,9 +1219,10 @@ Note: This demo excludes monochrome pipelines to promote future Bayer SPAD ISPs
                     run_single_btn = gr.Button("Run Single Reconstruction")
 
                 with gr.Column():
-                    gt_preview = gr.Image(label="GT Preview (resized)", type="numpy")
-                    lq_preview = gr.Image(label="Input Used by gQIR", type="numpy")
-                    recon_preview = gr.Image(label="Reconstruction", type="numpy")
+                    with gr.Row():
+                        single_input_preview = gr.Image(label="Input Frame", type="numpy")
+                        single_output_preview = gr.Image(label="Reconstruction (original aspect)", type="numpy")
+                    single_model_input_preview = gr.Image(label="Model Input (resized for inference)", type="numpy")
                     single_status = gr.Textbox(label="Status", interactive=False)
 
             single_mode.change(
@@ -1059,15 +1233,20 @@ Note: This demo excludes monochrome pipelines to promote future Bayer SPAD ISPs
 
             run_single_btn.click(
                 fn=run_single_reconstruction,
-                inputs=[single_mode, gt_image, real_spad_image, prompt, target_ppp, only_vae_output, seed],
-                outputs=[gt_preview, lq_preview, recon_preview, single_status],
+                inputs=[single_pipeline_type, single_mode, gt_image, real_spad_image, prompt, target_ppp, only_vae_output, seed],
+                outputs=[single_input_preview, single_output_preview, single_model_input_preview, single_status],
             )
 
-        with gr.Tab("Burst (Color Stage-3)"):
+        with gr.Tab("Burst (Stage-3)"):
             cube_state = gr.State(value=None)
 
             with gr.Row():
                 with gr.Column():
+                    burst_pipeline_type = gr.Radio(
+                        PIPELINE_OPTIONS,
+                        value=PIPELINE_COLOR,
+                        label="Pipeline",
+                    )
                     burst_mode = gr.Radio(
                         [BURST_MODE_GT, BURST_MODE_REAL],
                         value=BURST_MODE_GT,
@@ -1095,35 +1274,49 @@ Note: This demo excludes monochrome pipelines to promote future Bayer SPAD ISPs
                     run_burst_btn = gr.Button("Run Burst Reconstruction")
 
                 with gr.Column():
-                    burst_center_input = gr.Image(label="Center Input (3-bit aggregated)", type="numpy")
-                    burst_recon = gr.Image(label="Burst Reconstruction", type="numpy")
-                    burst_center_gt = gr.Image(label="Center GT (if GT mode)", type="numpy")
+                    with gr.Row():
+                        burst_input_display = gr.Image(label="Input Center Frame", type="numpy")
+                        burst_recon = gr.Image(label="Reconstruction (original aspect)", type="numpy")
+                    burst_model_input = gr.Image(label="Model Input Center (post-processing)", type="numpy")
                     burst_status = gr.Textbox(label="Status", interactive=False)
 
             load_cube_btn.click(
                 fn=load_cube_for_ui,
-                inputs=[burst_mode, cube_file, cube_path],
-                outputs=[cube_state, cube_info, start_idx, burst_center_input, burst_center_gt, burst_status],
+                inputs=[burst_pipeline_type, burst_mode, cube_file, cube_path],
+                outputs=[cube_state, cube_info, start_idx, burst_input_display, burst_model_input, burst_status],
             )
 
             run_burst_btn.click(
                 fn=run_burst_reconstruction,
-                inputs=[burst_mode, cube_state, start_idx],
-                outputs=[burst_center_input, burst_recon, burst_center_gt, burst_status],
+                inputs=[burst_pipeline_type, burst_mode, cube_state, start_idx],
+                outputs=[burst_input_display, burst_recon, burst_model_input, burst_status],
             )
 
     return demo
 
 
 def main() -> None:
-    global RUNTIME_SINGLE_CONFIG, RUNTIME_BURST_CONFIG, RUNTIME_DEVICE, RUNTIME_BURST_OUT_SIZE
+    global RUNTIME_SINGLE_CONFIGS, RUNTIME_BURST_CONFIGS, RUNTIME_DEVICE, RUNTIME_BURST_OUT_SIZES
 
     args = parse_args()
-    RUNTIME_SINGLE_CONFIG = Path(args.single_config).resolve()
-    RUNTIME_BURST_CONFIG = Path(args.burst_config).resolve()
+    single_color_cfg = Path(args.single_config if args.single_config else args.single_config_color).resolve()
+    burst_color_cfg = Path(args.burst_config if args.burst_config else args.burst_config_color).resolve()
+    single_mono_cfg = Path(args.single_config_mono).resolve()
+    burst_mono_cfg = Path(args.burst_config_mono).resolve()
+
+    RUNTIME_SINGLE_CONFIGS = {
+        PIPELINE_COLOR: single_color_cfg,
+        PIPELINE_MONO: single_mono_cfg,
+    }
+    RUNTIME_BURST_CONFIGS = {
+        PIPELINE_COLOR: burst_color_cfg,
+        PIPELINE_MONO: burst_mono_cfg,
+    }
     RUNTIME_DEVICE = args.device
-    burst_cfg = OmegaConf.load(str(RUNTIME_BURST_CONFIG))
-    RUNTIME_BURST_OUT_SIZE = int(burst_cfg.dataset.val.params.out_size)
+    RUNTIME_BURST_OUT_SIZES = {}
+    for key, cfg_path in RUNTIME_BURST_CONFIGS.items():
+        burst_cfg = OmegaConf.load(str(cfg_path))
+        RUNTIME_BURST_OUT_SIZES[key] = int(burst_cfg.dataset.val.params.out_size)
 
     demo = build_demo().queue()
     demo.launch(
