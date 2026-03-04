@@ -14,8 +14,12 @@ python gradio_app.py
 from __future__ import annotations
 
 import argparse
+import atexit
 import os
 import random
+import shutil
+import subprocess
+import tempfile
 import threading
 import traceback
 from dataclasses import dataclass
@@ -68,12 +72,24 @@ RUNTIME_SINGLE_CONFIG: Optional[Path] = None
 RUNTIME_BURST_CONFIG: Optional[Path] = None
 RUNTIME_DEVICE: str = "cpu"
 RUNTIME_BURST_OUT_SIZE: int = DEFAULT_MAX_SIZE[0]
+_TEMP_VIDEO_DIRS: list[str] = []
+
+
+def _cleanup_temp_video_dirs() -> None:
+    for p in _TEMP_VIDEO_DIRS:
+        try:
+            shutil.rmtree(p, ignore_errors=True)
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup_temp_video_dirs)
 
 
 @dataclass
 class CubeDescriptor:
     source_mode: str
-    kind: str  # dir | array | h5
+    kind: str  # dir | video | array | h5
     path: str
     total_frames: int
     out_size: int
@@ -81,6 +97,7 @@ class CubeDescriptor:
     array_format: Optional[str] = None  # npy | npz | pt
     array_key: Optional[str] = None
     h5_keys: Optional[list[str]] = None
+    temp_dir: Optional[str] = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -607,6 +624,52 @@ def _list_image_files(dir_path: str) -> list[str]:
     return files
 
 
+def _is_video_extension(ext: str) -> bool:
+    # Include common public-facing formats. Keep ".wav" for user compatibility;
+    # extraction will fail with a clear message since it is audio-only.
+    return ext in {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".wmv", ".wav"}
+
+
+def _extract_video_frames_to_temp(video_path: str) -> tuple[str, list[str]]:
+    temp_dir = tempfile.mkdtemp(prefix="gqir_video_frames_")
+    out_pattern = os.path.join(temp_dir, "frame_%06d.png")
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        video_path,
+        "-vsync",
+        "0",
+        "-start_number",
+        "0",
+        out_pattern,
+    ]
+    try:
+        proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise RuntimeError("ffmpeg is not installed; video input requires ffmpeg.") from exc
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        if Path(video_path).suffix.lower() == ".wav":
+            raise ValueError(
+                "WAV is audio-only and does not contain video frames. "
+                "Please upload MP4/MOV/WMV/AVI/MKV/WebM for GT video input."
+            ) from exc
+        raise ValueError(f"Failed to decode video with ffmpeg: {stderr or 'unknown ffmpeg error'}") from exc
+
+    files = _list_image_files(temp_dir)
+    if not files:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        stderr = (proc.stderr or "").strip()
+        raise ValueError(f"No frames were extracted from video. {stderr}".strip())
+    _TEMP_VIDEO_DIRS.append(temp_dir)
+    return temp_dir, files
+
+
 def _extract_first_array(obj: Any) -> np.ndarray:
     if isinstance(obj, np.ndarray):
         return obj
@@ -719,7 +782,7 @@ def _load_window_from_descriptor(desc: CubeDescriptor, start: int, count: int) -
             f"Invalid start index {start}. Valid range is [0, {max(desc.total_frames - count, 0)}]."
         )
 
-    if desc.kind == "dir":
+    if desc.kind in {"dir", "video"}:
         assert desc.files is not None
         subset = desc.files[start : start + count]
         frames = []
@@ -765,6 +828,20 @@ def _build_cube_descriptor(source_mode: str, path: str, out_size: int) -> CubeDe
         )
 
     ext = p.suffix.lower()
+    if _is_video_extension(ext):
+        if source_mode != BURST_MODE_GT:
+            raise ValueError("Video files are currently supported for GT burst mode only.")
+        temp_dir, files = _extract_video_frames_to_temp(path)
+        return CubeDescriptor(
+            source_mode=source_mode,
+            kind="video",
+            path=path,
+            total_frames=len(files),
+            out_size=out_size,
+            files=files,
+            temp_dir=temp_dir,
+        )
+
     if ext in {".npy", ".npz", ".pt", ".pth"}:
         fmt, key, total = _inspect_array_file(path)
         return CubeDescriptor(
@@ -843,7 +920,7 @@ def run_single_reconstruction(
             return gt_prev, lq_prev, recon, status
 
         if real_spad_image is None:
-            raise ValueError("Please provide a real SPAD frame image.")
+            raise ValueError("Please provide a real color SPAD frame.")
         lq_prev, recon, status = pipeline.reconstruct_from_real_spad(
             lq_image_np=real_spad_image,
             prompt=prompt,
@@ -885,6 +962,7 @@ def load_cube_for_ui(mode: str, cube_file: Any, cube_path: str):
 
         info = (
             f"Loaded cube: {descriptor.path}\n"
+            f"Input type: {descriptor.kind}\n"
             f"Frames: {descriptor.total_frames}\n"
             f"Valid start index range: [0, {max_start}]\n"
             f"Window size fixed at {BURST_WINDOW}"
@@ -936,15 +1014,16 @@ def build_demo() -> gr.Blocks:
 ## gQIR: Generative Quanta Image Reconstruction (Color Pipelines)
 
 - `Single Frame` tab: Stage-2 color reconstruction (`eval_sd2GAN.yaml`) from either GT image simulation or real SPAD frame.
-- `Burst` tab: Stage-3 color burst reconstruction (`eval_burst_mosaic.yaml`) from GT/real cubes with a start-index slider over fixed 77-frame windows.
+- `Burst` tab: Stage-3 color burst reconstruction (`eval_burst_mosaic.yaml`) from GT/real cubes with a start-index slider over fixed 77-bin-frame windows.
+- GT burst input now also supports public-friendly video uploads (`.mp4`, `.mov`, `.wmv`, `.avi`, `.mkv`, `.webm`) in addition to cube formats.
 
-Note: This demo intentionally excludes monochrome pipelines.
+Note: This demo excludes monochrome pipelines to promote future Bayer SPAD ISPs
 """
 
     with gr.Blocks(title="gQIR Color Demo") as demo:
         gr.Markdown(markdown)
 
-        with gr.Tab("Single Frame (Color Stage-2)"):
+        with gr.Tab("Single Frame (Stage-2)"):
             with gr.Row():
                 with gr.Column():
                     single_mode = gr.Radio(
@@ -956,10 +1035,10 @@ Note: This demo intentionally excludes monochrome pipelines.
                     real_spad_image = gr.Image(label="Real SPAD Frame", type="numpy", visible=False)
                     prompt = gr.Textbox(label="Prompt (optional)", value="")
                     target_ppp = gr.Slider(
-                        minimum=0.1,
-                        maximum=6.0,
+                        minimum=0.25,
+                        maximum=5.0,
                         value=3.5,
-                        step=0.1,
+                        step=0.25,
                         label="Target PPP (GT simulation only)",
                     )
                     only_vae_output = gr.Checkbox(label="Stage 1 (qVAE) output only", value=False)
@@ -994,7 +1073,14 @@ Note: This demo intentionally excludes monochrome pipelines.
                         value=BURST_MODE_GT,
                         label="Burst Input Mode",
                     )
-                    cube_file = gr.File(label="Cube File (.npy/.npz/.pt/.h5) or image directory path below", type="filepath")
+                    cube_file = gr.File(
+                        label=(
+                            "GT video/cube file "
+                            "(.mp4/.mov/.wmv/.avi/.mkv/.webm/.npy/.npz/.pt/.h5) "
+                            "or image directory path below"
+                        ),
+                        type="filepath",
+                    )
                     cube_path = gr.Textbox(label="Or Local Cube Path (file or folder)", value="")
                     load_cube_btn = gr.Button("Load Cube")
                     cube_info = gr.Textbox(label="Cube Info", interactive=False)
