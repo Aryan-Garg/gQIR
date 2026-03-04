@@ -31,6 +31,8 @@ Recommended Hardware: NVIDIA RTX 4090 (CUDA version: 12.5)
 
 ```bash
 conda env create -f environment.yml
+
+conda activate gqir
 ```
 
 #### RAFT setup:
@@ -44,7 +46,18 @@ Make sure `./pretrained_ckpts/models/raft-things.pth` is a valid path & properly
 ## <a id="quick_start"></a>Quick Start
 
 **Launching the local gradio demo:** 
-TODO
+
+Once you are in the `gqir` env and the repo's root dir, run:
+
+```bash
+python gradio_app.py --single-config configs/inference/eval_sd2GAN.yaml --burst-config configs/inference/eval_burst_mosaic.yaml --device cuda
+```
+
+Other optional args you can specify:
+1. --port <port-num>     
+2. --local (Bind to 127.0.0.1 instead of 0.0.0.0)
+3. --share (Creates a publicly share-able url for the demo)
+
 
 ## <a id="pretrained_models_and_dataset"></a>Pretrained Models and Dataset
 
