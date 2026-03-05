@@ -1,7 +1,7 @@
 # [CVPR 2026] gQIR: Generative Quanta Image Reconstruction
 
 <p align="center">
-    <img src="assets/README_teaser_color_SPAD_whitebg.png" width="650" alt="ColorSPADs">
+    <img src="assets/burst_comp.png" width="650" alt="ColorSPADs">
 </p>
 
 ![Static Badge](https://img.shields.io/badge/🐧-project_page-green?link=https%3A%2F%2Faryan-garg.github.io%2Fgqir)
