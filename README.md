@@ -65,7 +65,7 @@ Other optional args you can specify:
 See full Model card at HuggingFaces 🤗: [aRy4n/gQIR](https://huggingface.co/aRy4n/gQIR)
 
 
-| Color-Model Name | Stage | Bit Depth | Download Link |
+| Color-Model Name | Stage | Bit Depth | 🤗 Download Link |
 |:---|:---:|:---:|:---|
 | qVAE | Stage 1 | 1-bit | [1965000.pt](https://huggingface.co/aRy4n/gQIR/resolve/main/1-bit/1965000.pt) |
 | Adversarial Diffusion LoRA-UNet  | Stage 2 | 1-bit | [state_dict.pth](https://huggingface.co/aRy4n/gQIR/resolve/main/1-bit/state_dict.pth) |
