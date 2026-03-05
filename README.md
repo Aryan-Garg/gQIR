@@ -8,7 +8,7 @@
 <sup>1</sup> University of Wisconsin-Madison<br><sup>2</sup> Snap, Inc<br>
 
 <p align="center">
-    <img src="assets/burst_comp.png" width="650" alt="ColorSPADs">
+    <img src="assets/burst_comp.png" width="100%" alt="ColorSPADs">
 </p>
 
 ## Table of Contents
