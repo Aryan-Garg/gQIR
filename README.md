@@ -1,9 +1,5 @@
 # [CVPR 2026] gQIR: Generative Quanta Image Reconstruction
 
-<p align="center">
-    <img src="assets/README_teaser_color_SPAD_whitebg.png" width="650" alt="ColorSPADs">
-</p>
-
 ![Static Badge](https://img.shields.io/badge/🐧-project_page-green?link=https%3A%2F%2Faryan-garg.github.io%2Fgqir)
 [![arXiv](https://img.shields.io/badge/arXiv-2602.20417-b31b1b.svg)](https://arxiv.org/abs/2602.20417) [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow)](https://huggingface.co/spaces/aRy4n/gQIR)
 
@@ -11,6 +7,9 @@
 
 <sup>1</sup> University of Wisconsin-Madison<br><sup>2</sup> Snap, Inc<br>
 
+<p align="center">
+    <img src="assets/burst_comp.png" width="650" alt="ColorSPADs">
+</p>
 
 ## Table of Contents
 
