@@ -73,7 +73,6 @@ See full Model card at HuggingFaces 🤗: [aRy4n/gQIR](https://huggingface.co/aR
 | Adversarial Diffusion LoRA-UNet | Stage 2 |  3-bit | [state_dict.pth](https://huggingface.co/aRy4n/gQIR/resolve/main/state_dict.pth) |
 | FusionViT | Stage 3 |  3-bit | [fusion_vit_0050000.pt](https://huggingface.co/aRy4n/gQIR/resolve/main/fusion_vit_0050000.pt) |
 
----
 
 | Monochrome-Model | Stage | Bit Depth | 🤗 Download Link |
 |:---|:---:|:---:|:---|
