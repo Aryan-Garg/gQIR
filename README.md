@@ -5,7 +5,7 @@
 </p>
 
 ![Static Badge](https://img.shields.io/badge/🐧-project_page-green?link=https%3A%2F%2Faryan-garg.github.io%2Fgqir)
-[![arXiv](https://img.shields.io/badge/arXiv-2602.20417-b31b1b.svg)](https://arxiv.org/abs/2602.20417) [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow)](https://huggingface.co/spaces/AryanGarg/TODO)
+[![arXiv](https://img.shields.io/badge/arXiv-2602.20417-b31b1b.svg)](https://arxiv.org/abs/2602.20417) [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow)](https://huggingface.co/spaces/aRy4n/gQIR)
 
 [Aryan Garg](https://aryan-garg.github.io/)<sup>1</sup>, [Sizhuo Ma](https://sizhuoma.netlify.app/)<sup>2</sup>, [Mohit Gupta](https://wisionlab.com/people/mohit-gupta/)<sup>1</sup>
 
@@ -55,7 +55,7 @@ python gradio_app.py --single-config configs/inference/eval_sd2GAN.yaml --burst-
 
 Other optional args you can specify:
 1. --port <port-num>     
-2. --local (Bind to 127.0.0.1 instead of 0.0.0.0)
+2. --local 
 3. --share (Creates a publicly share-able url for the demo)
 
 
