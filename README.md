@@ -73,6 +73,14 @@ See full Model card at HuggingFaces 🤗: [aRy4n/gQIR](https://huggingface.co/aR
 | Adversarial Diffusion LoRA-UNet | Stage 2 |  3-bit | [state_dict.pth](https://huggingface.co/aRy4n/gQIR/resolve/main/state_dict.pth) |
 | FusionViT | Stage 3 |  3-bit | [fusion_vit_0050000.pt](https://huggingface.co/aRy4n/gQIR/resolve/main/fusion_vit_0050000.pt) |
 
+---
+
+| Monochrome-Model | Stage | Bit Depth | 🤗 Download Link |
+|:---|:---:|:---:|:---|
+| qVAE | Stage 1 | 3-bit | [0150000.pt](https://huggingface.co/aRy4n/gQIR/resolve/main/mono/0150000.pt) |
+| Adversarial Diffusion LoRA-UNet  | Stage 2 | 3-bit | [state_dict.pth](https://huggingface.co/aRy4n/gQIR/resolve/main/mono/state_dict.pth) |
+| FusionViT | Stage 3 |  3-bit | [fusion_vit_0020000.pt](https://huggingface.co/aRy4n/gQIR/resolve/main/mono/fusion_vit_0020000.pt) |
+
 ### XD-Dataset:
 The 390 videos large XD dataset and it's description can be found at HuggingFaces 🤗: [aRy4n/eXtreme-Deformable](https://huggingface.co/datasets/aRy4n/eXtreme-Deformable).
 
