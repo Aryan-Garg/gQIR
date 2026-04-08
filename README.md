@@ -12,7 +12,7 @@
 </p>
 
 ## Table of Contents
-
+- [Updates](#updates)
 - [Installation](#installation)
 - [Quick Start](#quick_start)
 - [Pretrained Models and Dataset](#pretrained_models_and_dataset)
@@ -22,6 +22,10 @@
 - [Acknowledgements](#acknowledgements)
 - [Contact](#contact)
 - [FAQs](#faqs)
+
+## <a id="updates"></a>Updates
+
+**8-Apr, 2026:** SD3.5 VAE [Code](https://github.com/Aryan-Garg/gQIR_SD35) and [weights](https://huggingface.co/aRy4n/gQIR/tree/main/sd35_vae) also open-sourced now!
 
 
 ## <a id="installation"></a>Installation
