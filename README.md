@@ -1,4 +1,4 @@
-# [CVPR 2026] gQIR: Generative Quanta Image Reconstruction
+# [CVPR 2026] gQIR: Generative Quanta Image Reconstruction (Highlight; Top 10%)
 
 ![Static Badge](https://img.shields.io/badge/🐧-project_page-green?link=https%3A%2F%2Faryan-garg.github.io%2Fgqir)
 [![arXiv](https://img.shields.io/badge/arXiv-2602.20417-b31b1b.svg)](https://arxiv.org/abs/2602.20417) [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow)](https://huggingface.co/spaces/aRy4n/gQIR)
@@ -25,6 +25,7 @@
 
 ## <a id="updates"></a>Updates
 
+**9-Apr, 2026** gQIR is accepted to CVPR as a highlight! (Top 10% Accepted Papers)
 **8-Apr, 2026:** SD3.5 VAE [Code](https://github.com/Aryan-Garg/gQIR_SD35) and [weights](https://huggingface.co/aRy4n/gQIR/tree/main/sd35_vae) also open-sourced now!
 
 
