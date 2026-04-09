@@ -25,7 +25,7 @@
 
 ## <a id="updates"></a>Updates
 
-**9-Apr, 2026** gQIR is accepted to CVPR as a highlight! (Top 10% Accepted Papers)
+**9-Apr, 2026** gQIR is accepted to CVPR as a highlight! (Top 10% Accepted Papers)         
 **8-Apr, 2026:** SD3.5 VAE [Code](https://github.com/Aryan-Garg/gQIR_SD35) and [weights](https://huggingface.co/aRy4n/gQIR/tree/main/sd35_vae) also open-sourced now!
 
 
